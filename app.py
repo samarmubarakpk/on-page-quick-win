@@ -102,11 +102,82 @@ def analyze_url(url: str, keyword: str) -> Dict:
         st.error(f"Error analyzing {url}: {str(e)}")
         return None
 
+def is_branded_query(query: str, branded_terms: List[str]) -> bool:
+    """Check if a query contains any branded terms"""
+    query = query.lower()
+    return any(brand.lower() in query for brand in branded_terms if brand.strip())
+
+def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
+    """Get top queries by clicks for each unique URL"""
+    # Remove branded queries if any were marked
+    if 'is_branded' in df.columns:
+        df = df[~df['is_branded']]
+    
+    # Sort URLs by total clicks to prioritize more important pages
+    url_total_clicks = df.groupby('URL')['Clicks'].sum().sort_values(ascending=False)
+    
+    results = []
+    for url in url_total_clicks.index:
+        url_queries = df[df['URL'] == url].copy()
+        
+        # Get queries with clicks first
+        queries_with_clicks = url_queries[url_queries['Clicks'] > 0].nlargest(max_queries, 'Clicks')
+        
+        # If we have less than max_queries with clicks, add some zero-click queries sorted by impressions
+        if len(queries_with_clicks) < max_queries:
+            remaining_slots = max_queries - len(queries_with_clicks)
+            zero_click_queries = url_queries[url_queries['Clicks'] == 0].nlargest(remaining_slots, 'Impressions')
+            queries_for_url = pd.concat([queries_with_clicks, zero_click_queries])
+        else:
+            queries_for_url = queries_with_clicks
+        
+        results.append(queries_for_url)
+    
+    return pd.concat(results)
+
+def format_avg_position(position_str: str) -> float:
+    """Format average position to have correct decimal places"""
+    try:
+        # Remove any commas or dots from the string
+        clean_str = str(position_str).replace(',', '').replace('.', '')
+        
+        # Convert to float
+        num = float(clean_str)
+        
+        # If it's a large number (like 10.035.289.504.639.900), it's probably meant to be 1.0
+        if num > 100:
+            # Get first digit
+            first_digit = int(str(clean_str)[0])
+            if first_digit == 1:
+                return 1.0
+            elif first_digit == 2:
+                return 2.0
+            # If it starts with 9, it's probably meant to be 9.something
+            elif first_digit == 9:
+                # Take first 4 characters and format properly
+                position = float(clean_str[:4]) / 100
+                return round(position, 2)
+        
+        return round(float(position_str), 2)
+    except (ValueError, TypeError):
+        return 0.0
+
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
     
     st.title("On Page Quick Wins")
     st.write("Upload your GSC performance report to analyze keyword usage in your pages.")
+    
+    # Add branded terms input
+    st.subheader("Branded Terms")
+    branded_terms_input = st.text_area(
+        "Enter your branded terms (one per line) to exclude from analysis:",
+        help="Enter terms related to your brand that you want to exclude from the analysis. For example:\nApple\niPhone\nMacBook"
+    )
+    branded_terms = [term.strip() for term in branded_terms_input.split('\n') if term.strip()]
+    
+    if branded_terms:
+        st.info(f"The following branded terms will be excluded: {', '.join(branded_terms)}")
     
     uploaded_file = st.file_uploader("Upload GSC Performance Report (CSV)", type=['csv'])
     
@@ -114,23 +185,41 @@ def main():
         try:
             # Read the CSV file
             df = pd.read_csv(uploaded_file)
-            required_columns = ['Query', 'URL', 'Clicks', 'Impressions']
+            required_columns = ['Query', 'URL', 'Clicks', 'Impressions', 'Avg. Pos']
             
             if not all(col in df.columns for col in required_columns):
-                st.error("CSV file must contain: Query, URL, Clicks, and Impressions columns")
+                st.error("CSV file must contain: Query, URL, Clicks, Impressions, and Avg. Pos columns")
                 return
             
-            # Sort by clicks first, then impressions for remaining slots
-            top_queries = pd.concat([
-                df.nlargest(10, 'Clicks'),
-                df[df['Clicks'] == 0].nlargest(10 - len(df[df['Clicks'] > 0]), 'Impressions')
-            ]).drop_duplicates().head(10)
+            # Format average position
+            df['Avg. Pos'] = df['Avg. Pos'].apply(format_avg_position)
+            
+            # Filter out branded queries
+            if branded_terms:
+                original_count = len(df)
+                df['is_branded'] = df['Query'].apply(lambda x: is_branded_query(x, branded_terms))
+                df = df[~df['is_branded']]
+                filtered_count = len(df)
+                st.write(f"Filtered out {original_count - filtered_count} branded queries.")
+            
+            # Get top queries per URL
+            top_queries = get_top_queries_per_url(df)
+            
+            if len(top_queries) == 0:
+                st.warning("No non-branded queries found in the dataset. Please check your branded terms or upload a different dataset.")
+                return
+            
+            # Display summary of URLs and queries being analyzed
+            unique_urls = top_queries['URL'].nunique()
+            total_queries = len(top_queries)
+            st.write(f"Analyzing top queries for {unique_urls} URLs (Total queries: {total_queries})")
             
             results = []
             progress_bar = st.progress(0)
+            total_analyses = len(top_queries)
             
             for idx, row in top_queries.iterrows():
-                progress = (idx + 1) / len(top_queries)
+                progress = (idx + 1) / total_analyses
                 progress_bar.progress(progress)
                 
                 analysis = analyze_url(row['URL'], row['Query'])
@@ -139,6 +228,9 @@ def main():
                         'URL': row['URL'],
                         'Query': row['Query'],
                         'Clicks': row['Clicks'],
+                        'Impressions': row['Impressions'],
+                        'Avg. Position': row['Avg. Pos'],
+                        'CTR': f"{(row['Clicks'] / row['Impressions'] * 100):.2f}%" if row['Impressions'] > 0 else "0%",
                         'Title': analysis['title'],
                         'Title Contains': analysis['title_contains'],
                         'Meta Description': analysis['meta_description'],
@@ -161,7 +253,13 @@ def main():
             
             if results:
                 results_df = pd.DataFrame(results)
-                st.dataframe(results_df, use_container_width=True)
+                
+                # Group results by URL for better visualization
+                st.subheader("Analysis Results")
+                for url in results_df['URL'].unique():
+                    url_results = results_df[results_df['URL'] == url]
+                    st.write(f"### {url}")
+                    st.dataframe(url_results, use_container_width=True)
                 
                 # Export option
                 csv = results_df.to_csv(index=False)
