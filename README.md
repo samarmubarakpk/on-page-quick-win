@@ -1,27 +1,37 @@
-# SEO Keyword Check for Queries
+# SEO Query Element Analyzer
 
-This Streamlit application performs an SEO audit by cross-referencing a search query with the key elements of a webpage. It checks if the query is being used in key SEO elements such as the title, meta description, H1, H2 subheadings, and within the page content (ignoring header, footer, sidebar, popups, etc.).
+A Streamlit application that analyzes Google Search Console reports against page SEO elements.
 
 ## Features
-
-- Upload a Google Search Console (GSC) performance report (CSV format) with queries, URLs, and clicks.
-- Extracts SEO-related elements (Title, Meta Description, H1, H2, and body content) from the provided URLs.
-- Check whether each query is used in the respective SEO elements.
-- Displays a detailed report with "is being used?" checks for each query in key SEO elements.
-
-## How It Works
-
-1. **Input**: The user uploads a GSC performance report containing queries, URLs, clicks, impressions, average position, and URL CTR.
-2. **Processing**: The script processes the top 10 queries with the highest clicks (or impressions if clicks are 0) and checks if each query is used in key SEO elements on each URL.
-3. **Output**: The results are displayed in a table format showing whether the query is used in the Title, Meta Description, H1, H2, and the body content.
+- Processes GSC reports (CSV/XLSX)
+- Analyzes top queries by clicks/impressions
+- Checks keyword usage in:
+  - Page titles
+  - Meta descriptions
+  - H1/H2 headings
+  - Body content (excluding navigation elements)
+- Generates interactive CSV reports
 
 ## Requirements
+- Python 3.8+
+- Dependencies in `requirements.txt`
 
-To run the application, you will need the following Python packages:
-- `streamlit`: For building the Streamlit web application.
-- `pandas`: For handling CSV data and data manipulation.
-- `requests`: For fetching the webpage content.
-- `beautifulsoup4`: For parsing HTML and extracting SEO elements.
+## Installation
+```powershell
+pip install -r requirements.txt
+```
 
-You can install the required packages using the following command:
+## Usage
+1. Export GSC performance report
+2. Run the app:
+```powershell
+streamlit run app.py
+```
+3. Upload your report and view analysis
 
+## Output Columns
+- URL
+- Query
+- Clicks
+- Title/Meta/H1/H2s/Body content
+- Boolean matches for each element
