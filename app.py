@@ -114,11 +114,11 @@ def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataF
         df = df[~df['is_branded']]
     
     # Sort URLs by total clicks to prioritize more important pages
-    url_total_clicks = df.groupby('URL')['Clicks'].sum().sort_values(ascending=False)
+    url_total_clicks = df.groupby('Landing Page')['Clicks'].sum().sort_values(ascending=False)
     
     results = []
     for url in url_total_clicks.index:
-        url_queries = df[df['URL'] == url].copy()
+        url_queries = df[df['Landing Page'] == url].copy()
         
         # Get queries with clicks first
         queries_with_clicks = url_queries[url_queries['Clicks'] > 0].nlargest(max_queries, 'Clicks')
@@ -175,7 +175,7 @@ def clean_gsc_data(df: pd.DataFrame) -> pd.DataFrame:
     original_len = len(df)
     
     # Filter rows with valid URLs
-    df = df[df['URL'].apply(is_valid_url)]
+    df = df[df['Landing Page'].apply(is_valid_url)]
     
     # Convert clicks and impressions to numeric, replacing non-numeric with 0
     df['Clicks'] = pd.to_numeric(df['Clicks'], errors='coerce').fillna(0).astype(int)
@@ -218,19 +218,20 @@ def main():
             # Try different CSV reading configurations
             try:
                 # First try with default settings
-                df = pd.read_csv(uploaded_file)
+                df = pd.read_csv(uploaded_file, sep='\t')  # Use tab separator
             except pd.errors.ParserError:
                 # If that fails, try with different settings
                 uploaded_file.seek(0)  # Reset file pointer
                 df = pd.read_csv(
                     uploaded_file,
+                    sep='\t',  # Use tab separator
                     encoding='utf-8',
                     on_bad_lines='skip',
                     skipinitialspace=True,
                     engine='python'
                 )
             
-            required_columns = ['Query', 'URL', 'Clicks', 'Impressions', 'Avg. Pos']
+            required_columns = ['Query', 'Landing Page', 'Clicks', 'Impressions', 'Avg. Pos']
             
             if not all(col in df.columns for col in required_columns):
                 st.error(f"CSV file must contain these columns: {', '.join(required_columns)}")
@@ -268,7 +269,7 @@ def main():
                 return
             
             # Display summary of URLs and queries being analyzed
-            unique_urls = top_queries['URL'].nunique()
+            unique_urls = top_queries['Landing Page'].nunique()
             total_queries = len(top_queries)
             st.write(f"Analyzing top queries for {unique_urls} URLs (Total queries: {total_queries})")
             
@@ -280,10 +281,10 @@ def main():
                 progress = (idx + 1) / total_analyses
                 progress_bar.progress(progress)
                 
-                analysis = analyze_url(row['URL'], row['Query'])
+                analysis = analyze_url(row['Landing Page'], row['Query'])
                 if analysis:
                     results.append({
-                        'URL': row['URL'],
+                        'URL': row['Landing Page'],
                         'Query': row['Query'],
                         'Clicks': row['Clicks'],
                         'Impressions': row['Impressions'],
