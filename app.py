@@ -194,6 +194,13 @@ def clean_gsc_data(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
+def format_ctr(value: float) -> str:
+    """Format CTR as percentage with 2 decimal places"""
+    try:
+        return f"{float(value):.2f}%"
+    except (ValueError, TypeError):
+        return "0.00%"
+
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
     
@@ -249,21 +256,29 @@ def main():
                 st.error("No valid data rows found after cleaning. Please check your CSV file.")
                 return
             
-            # Format average position
+            # Format numeric columns
+            df['Clicks'] = df['Clicks'].astype(int)
+            df['Impressions'] = df['Impressions'].astype(int)
             df['Avg. Pos'] = df['Avg. Pos'].apply(format_avg_position)
+            if 'URL CTR' in df.columns:
+                df['URL CTR'] = df['URL CTR'].apply(lambda x: float(str(x).replace('%', '')) if pd.notna(x) else 0)
+                df['URL CTR'] = df['URL CTR'].apply(format_ctr)
             
-            # Show data preview
-            st.subheader("Data Preview")
-            st.write("First few rows of your cleaned data:")
-            st.dataframe(df.head(), use_container_width=True)
-            
-            # Filter out branded queries
+            # Filter out branded queries first
             if branded_terms:
                 original_count = len(df)
                 df['is_branded'] = df['Query'].apply(lambda x: is_branded_query(x, branded_terms))
                 df = df[~df['is_branded']]
                 filtered_count = len(df)
                 st.write(f"Filtered out {original_count - filtered_count} branded queries.")
+            
+            # Show data preview of cleaned and filtered data
+            st.subheader("Data Preview")
+            st.write("First few rows of your cleaned and filtered data:")
+            preview_df = df.head()
+            # Format the preview dataframe
+            preview_df = preview_df.drop('is_branded', axis=1, errors='ignore')
+            st.dataframe(preview_df, use_container_width=True)
             
             # Get top queries per URL
             top_queries = get_top_queries_per_url(df)
@@ -278,22 +293,28 @@ def main():
             st.write(f"Analyzing top queries for {unique_urls} URLs (Total queries: {total_queries})")
             
             results = []
-            progress_bar = st.progress(0)
+            
+            # Create progress bar with proper chunking
             total_analyses = len(top_queries)
+            total_chunks = min(100, total_analyses)  # Limit to 100 chunks
+            chunk_size = max(1, total_analyses // total_chunks)
+            progress_bar = st.progress(0)
             
             for idx, row in top_queries.iterrows():
-                progress = (idx + 1) / total_analyses
-                progress_bar.progress(progress)
+                # Update progress every chunk_size iterations
+                if idx % chunk_size == 0:
+                    progress = min(1.0, idx / total_analyses)
+                    progress_bar.progress(progress)
                 
                 analysis = analyze_url(row['Landing Page'], row['Query'])
                 if analysis:
                     results.append({
                         'URL': row['Landing Page'],
                         'Query': row['Query'],
-                        'Clicks': row['Clicks'],
-                        'Impressions': row['Impressions'],
+                        'Clicks': int(row['Clicks']),
+                        'Impressions': int(row['Impressions']),
                         'Avg. Position': row['Avg. Pos'],
-                        'CTR': f"{(row['Clicks'] / row['Impressions'] * 100):.2f}%" if row['Impressions'] > 0 else "0%",
+                        'CTR': format_ctr(row['Clicks'] / row['Impressions'] * 100 if row['Impressions'] > 0 else 0),
                         'Title': analysis['title'],
                         'Title Contains': analysis['title_contains'],
                         'Meta Description': analysis['meta_description'],
@@ -313,7 +334,10 @@ def main():
                         'Copy': analysis['main_content'],
                         'Copy Contains': analysis['content_contains']
                     })
-            
+
+            # Set progress to 100% when done
+            progress_bar.progress(1.0)
+
             if results:
                 results_df = pd.DataFrame(results)
                 
