@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+import bs4
+BeautifulSoup = bs4.BeautifulSoup
 import re
 
 def clean_text(text):
