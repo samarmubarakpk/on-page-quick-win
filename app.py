@@ -1,7 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    st.error("Error: BeautifulSoup4 is not installed. Please make sure you have beautifulsoup4 installed in your environment.")
+    st.stop()
+
 import re
 
 def clean_text(text):
