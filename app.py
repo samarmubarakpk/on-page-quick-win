@@ -130,30 +130,27 @@ def check_keyword_presence(text: str, keyword: str) -> bool:
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
+    # Remove rows with 0 clicks
+    df = df[df['Clicks'] > 0].copy()
+    
     # Remove branded queries if any were marked
-    if 'is_branded' in df.columns:
-        df = df[~df['is_branded']]
+    df['is_branded'] = df['Query'].apply(lambda x: 'BRANDED' in str(x).upper())
+    df = df[~df['is_branded']]
     
-    # Sort URLs by total clicks to prioritize more important pages
-    url_total_clicks = df.groupby('Landing Page')['Clicks'].sum().sort_values(ascending=False)
-    
+    # Group by Landing Page and get top queries
     results = []
-    for url in url_total_clicks.index:
-        url_queries = df[df['Landing Page'] == url].copy()
+    for url in df['Landing Page'].unique():
+        url_data = df[df['Landing Page'] == url]
         
-        # Get queries with clicks first
-        queries_with_clicks = url_queries[url_queries['Clicks'] > 0].nlargest(max_queries, 'Clicks')
+        # Sort by Clicks (descending) and take top N queries
+        top_queries = url_data.nlargest(max_queries, 'Clicks')
         
-        # If we have less than max_queries with clicks, add some zero-click queries sorted by impressions
-        if len(queries_with_clicks) < max_queries:
-            remaining_slots = max_queries - len(queries_with_clicks)
-            zero_click_queries = url_queries[url_queries['Clicks'] == 0].nlargest(remaining_slots, 'Impressions')
-            queries_for_url = pd.concat([queries_with_clicks, zero_click_queries])
-        else:
-            queries_for_url = queries_with_clicks
-        
-        results.append(queries_for_url)
+        if not top_queries.empty:
+            results.append(top_queries)
     
+    if not results:
+        return pd.DataFrame()  # Return empty DataFrame if no results
+        
     return pd.concat(results)
 
 def is_branded_query(query: str, branded_terms: List[str]) -> bool:
