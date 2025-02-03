@@ -6,49 +6,117 @@ import re
 from typing import List, Dict
 
 class SEOParser(HTMLParser):
-    def __init__(self):
+    def __init__(self, content_wrapper=None):
         super().__init__()
         self.title = ""
         self.meta_description = ""
-        self.h1s = []
-        self.h2s = []
-        self.current_tag = None
+        self.h1 = []
+        self.h2 = []
         self.main_content = []
-        self.in_nav = False
-        self.in_header = False
-        self.in_footer = False
-        self.in_sidebar = False
-
+        self.current_tag = None
+        self.reading_content = False
+        self.content_wrapper = content_wrapper
+        self.in_wrapper = False if content_wrapper else True  # If no wrapper specified, always collect content
+        self.skip_tags = {'script', 'style', 'nav', 'header', 'footer', 'iframe', 'noscript'}
+        self.current_skip = False
+    
     def handle_starttag(self, tag, attrs):
         self.current_tag = tag
         attrs_dict = dict(attrs)
         
-        if tag == 'meta' and attrs_dict.get('name') == 'description':
+        # Check if we're entering the content wrapper
+        if self.content_wrapper and tag == 'div' and 'class' in attrs_dict:
+            classes = attrs_dict['class'].split()
+            if self.content_wrapper in classes:
+                self.in_wrapper = True
+        
+        # Skip unwanted elements
+        if tag in self.skip_tags:
+            self.current_skip = True
+            return
+        
+        if tag == 'title':
+            self.reading_content = True
+        elif tag == 'meta' and attrs_dict.get('name', '').lower() == 'description':
             self.meta_description = attrs_dict.get('content', '')
-        elif tag in ['nav', 'header', 'footer', 'aside']:
-            setattr(self, f'in_{tag}', True)
-
+    
     def handle_endtag(self, tag):
-        if tag in ['nav', 'header', 'footer', 'aside']:
-            setattr(self, f'in_{tag}', False)
+        if tag in self.skip_tags:
+            self.current_skip = False
+        
+        # Check if we're exiting the content wrapper
+        if self.content_wrapper and tag == 'div' and self.in_wrapper:
+            self.in_wrapper = False
+        
+        if tag == 'title':
+            self.reading_content = False
         self.current_tag = None
-
+    
     def handle_data(self, data):
+        if self.current_skip:
+            return
+            
         data = data.strip()
         if not data:
             return
-            
-        if self.in_nav or self.in_header or self.in_footer or self.in_sidebar:
-            return
-
-        if self.current_tag == 'title':
+        
+        if self.reading_content and self.current_tag == 'title':
             self.title = data
         elif self.current_tag == 'h1':
-            self.h1s.append(data)
+            self.h1.append(data)
         elif self.current_tag == 'h2':
-            self.h2s.append(data)
-        elif self.current_tag in ['p', 'div', 'span', 'article']:
+            self.h2.append(data)
+        # Only collect main content if we're in the wrapper (or if no wrapper specified)
+        elif self.in_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
             self.main_content.append(data)
+
+def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
+    """Analyze a URL for SEO elements and keyword usage"""
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        if response.status_code == 404:
+            return {'error': '404', 'url': url}
+        response.raise_for_status()
+        
+        parser = SEOParser(content_wrapper)
+        parser.feed(response.text)
+        
+        # Get the first 5 H2s or empty strings if not enough
+        h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
+        
+        # Join main content with spaces and clean it
+        main_content = ' '.join(parser.main_content).strip()
+        
+        # Function to check if query appears in text (case insensitive)
+        def contains_query(text):
+            return query.lower() in text.lower() if text else False
+        
+        return {
+            'success': True,
+            'url': url,
+            'title': parser.title,
+            'title_contains': contains_query(parser.title),
+            'meta_description': parser.meta_description,
+            'meta_contains': contains_query(parser.meta_description),
+            'h1': parser.h1[0] if parser.h1 else '',
+            'h1_contains': contains_query(parser.h1[0] if parser.h1 else ''),
+            'h2_1': h2s[0],
+            'h2_1_contains': contains_query(h2s[0]),
+            'h2_2': h2s[1],
+            'h2_2_contains': contains_query(h2s[1]),
+            'h2_3': h2s[2],
+            'h2_3_contains': contains_query(h2s[2]),
+            'h2_4': h2s[3],
+            'h2_4_contains': contains_query(h2s[3]),
+            'h2_5': h2s[4],
+            'h2_5_contains': contains_query(h2s[4]),
+            'main_content': main_content[:500] + '...' if len(main_content) > 500 else main_content,
+            'content_contains': contains_query(main_content)
+        }
+    except requests.exceptions.RequestException as e:
+        return {'error': str(e), 'url': url}
+    except Exception as e:
+        return {'error': str(e), 'url': url}
 
 def clean_text(text: str) -> str:
     """Clean text by removing extra whitespace and newlines"""
@@ -59,53 +127,6 @@ def check_keyword_presence(text: str, keyword: str) -> bool:
     if not text or not keyword:
         return False
     return keyword.lower() in text.lower()
-
-def analyze_url(url: str, keyword: str) -> Dict:
-    """Analyze a URL for SEO elements and keyword presence"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        parser = SEOParser()
-        parser.feed(response.text)
-        
-        # Get first 5 H2s or pad with empty strings
-        h2s = parser.h2s[:5]
-        h2s.extend([''] * (5 - len(h2s)))
-        
-        main_content = ' '.join(parser.main_content)
-        
-        return {
-            'title': clean_text(parser.title),
-            'title_contains': check_keyword_presence(parser.title, keyword),
-            'meta_description': clean_text(parser.meta_description),
-            'meta_contains': check_keyword_presence(parser.meta_description, keyword),
-            'h1': clean_text(parser.h1s[0] if parser.h1s else ''),
-            'h1_contains': check_keyword_presence(parser.h1s[0] if parser.h1s else '', keyword),
-            'h2_1': clean_text(h2s[0]),
-            'h2_1_contains': check_keyword_presence(h2s[0], keyword),
-            'h2_2': clean_text(h2s[1]),
-            'h2_2_contains': check_keyword_presence(h2s[1], keyword),
-            'h2_3': clean_text(h2s[2]),
-            'h2_3_contains': check_keyword_presence(h2s[2], keyword),
-            'h2_4': clean_text(h2s[3]),
-            'h2_4_contains': check_keyword_presence(h2s[3], keyword),
-            'h2_5': clean_text(h2s[4]),
-            'h2_5_contains': check_keyword_presence(h2s[4], keyword),
-            'main_content': clean_text(main_content[:1000]),  # Limit content length for display
-            'content_contains': check_keyword_presence(main_content, keyword)
-        }
-    except Exception as e:
-        st.error(f"Error analyzing {url}: {str(e)}")
-        return None
-
-def is_branded_query(query: str, branded_terms: List[str]) -> bool:
-    """Check if a query contains any branded terms"""
-    query = query.lower()
-    return any(brand.lower() in query for brand in branded_terms if brand.strip())
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
@@ -135,32 +156,10 @@ def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataF
     
     return pd.concat(results)
 
-def format_avg_position(position_str: str) -> float:
-    """Format average position to have correct decimal places"""
-    try:
-        # Remove any commas or dots from the string
-        clean_str = str(position_str).replace(',', '').replace('.', '')
-        
-        # Convert to float
-        num = float(clean_str)
-        
-        # If it's a large number (like 10.035.289.504.639.900), it's probably meant to be 1.0
-        if num > 100:
-            # Get first digit
-            first_digit = int(str(clean_str)[0])
-            if first_digit == 1:
-                return 1.0
-            elif first_digit == 2:
-                return 2.0
-            # If it starts with 9, it's probably meant to be 9.something
-            elif first_digit == 9:
-                # Take first 4 characters and format properly
-                position = float(clean_str[:4]) / 100
-                return round(position, 2)
-        
-        return round(float(position_str), 2)
-    except (ValueError, TypeError):
-        return 0.0
+def is_branded_query(query: str, branded_terms: List[str]) -> bool:
+    """Check if a query contains any branded terms"""
+    query = query.lower()
+    return any(brand.lower() in query for brand in branded_terms if brand.strip())
 
 def is_valid_url(url: str) -> bool:
     """Check if a string is a valid URL"""
@@ -201,11 +200,39 @@ def format_ctr(value: float) -> str:
     except (ValueError, TypeError):
         return "0.00%"
 
+def format_avg_position(position_str: str) -> float:
+    """Format average position to have correct decimal places"""
+    try:
+        # Remove any commas or dots from the string
+        clean_str = str(position_str).replace(',', '').replace('.', '')
+        
+        # Get the first digits before any potential decimals
+        first_digits = clean_str[:2] if len(clean_str) > 1 else clean_str
+        
+        # If it starts with a single digit (1-9)
+        if len(first_digits) == 1 or (len(first_digits) == 2 and first_digits[0] == '0'):
+            # Take first digit and next digit as decimal
+            return round(float(f"{first_digits[0]}.{clean_str[1]}"), 1)
+        else:
+            # For numbers starting with 2 or more digits
+            # Take first two digits and third digit as decimal
+            return round(float(f"{first_digits}.{clean_str[2]}"), 1)
+            
+    except (ValueError, TypeError, IndexError):
+        return 0.0
+
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
     
     st.title("On Page Quick Wins")
     st.write("Upload your GSC performance report to analyze keyword usage in your pages.")
+    
+    # Add content wrapper input
+    content_wrapper = st.text_input(
+        "Content Wrapper Class (Optional)",
+        help="Enter the HTML class name that wraps your main content (e.g., 'blog-content-wrapper' or 'product-description'). "
+        "This helps extract only relevant content and ignore navigation, popups, etc."
+    )
     
     # Add branded terms input
     st.subheader("Branded Terms")
@@ -292,7 +319,10 @@ def main():
             total_queries = len(top_queries)
             st.write(f"Analyzing top queries for {unique_urls} URLs (Total queries: {total_queries})")
             
+            # Initialize collections for results and errors
             results = []
+            not_found_urls = set()  # Using set to avoid duplicates
+            other_errors = []
             
             # Create progress bar with proper chunking
             total_analyses = len(top_queries)
@@ -306,8 +336,16 @@ def main():
                     progress = min(1.0, idx / total_analyses)
                     progress_bar.progress(progress)
                 
-                analysis = analyze_url(row['Landing Page'], row['Query'])
-                if analysis:
+                analysis = analyze_url(row['Landing Page'], row['Query'], content_wrapper)
+                
+                if analysis.get('error') == '404':
+                    not_found_urls.add(analysis['url'])
+                elif 'error' in analysis:
+                    other_errors.append({
+                        'url': analysis['url'],
+                        'error': analysis['error']
+                    })
+                else:
                     results.append({
                         'URL': row['Landing Page'],
                         'Query': row['Query'],
@@ -343,20 +381,69 @@ def main():
                 
                 # Group results by URL for better visualization
                 st.subheader("Analysis Results")
-                for url in results_df['URL'].unique():
-                    url_results = results_df[results_df['URL'] == url]
-                    st.write(f"### {url}")
-                    st.dataframe(url_results, use_container_width=True)
                 
-                # Export option
+                # Add download button for all results at the top
                 csv = results_df.to_csv(index=False)
                 st.download_button(
-                    label="Download Analysis Report",
+                    label="📥 Download Complete Analysis Report (All URLs)",
                     data=csv,
-                    file_name="seo_analysis_report.csv",
-                    mime="text/csv"
+                    file_name="seo_analysis_report_all.csv",
+                    mime="text/csv",
+                    help="Download the complete analysis for all URLs in a single CSV file"
                 )
-            
+                
+                # Show individual URL tables
+                for url in results_df['URL'].unique():
+                    st.write(f"### {url}")
+                    url_results = results_df[results_df['URL'] == url]
+                    st.dataframe(url_results, use_container_width=True)
+                    
+                    # Individual URL download (optional)
+                    url_csv = url_results.to_csv(index=False)
+                    st.download_button(
+                        label=f"📥 Download {url.split('/')[-1] or 'homepage'} Analysis",
+                        data=url_csv,
+                        file_name=f"seo_analysis_{url.split('/')[-1] or 'homepage'}.csv",
+                        mime="text/csv",
+                        key=f"download_{url}"  # Unique key for each button
+                    )
+                
+                # Show error summary if there were any issues
+                if not_found_urls or other_errors:
+                    st.subheader("⚠️ Analysis Warnings")
+                    
+                    # Display 404 errors
+                    if not_found_urls:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.warning(f"Found {len(not_found_urls)} URLs returning 404 Not Found")
+                        with col2:
+                            # Create CSV for 404 URLs
+                            not_found_df = pd.DataFrame({'URL': list(not_found_urls)})
+                            csv = not_found_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Download 404 URLs",
+                                data=csv,
+                                file_name="404_not_found_urls.csv",
+                                mime="text/csv",
+                            )
+                    
+                    # Display other errors if any
+                    if other_errors:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.warning(f"Found {len(other_errors)} URLs with other errors")
+                        with col2:
+                            # Create CSV for other errors
+                            other_errors_df = pd.DataFrame(other_errors)
+                            csv = other_errors_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Download Error Details",
+                                data=csv,
+                                file_name="url_errors.csv",
+                                mime="text/csv",
+                            )
+
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
 
