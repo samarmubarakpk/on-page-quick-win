@@ -1,33 +1,66 @@
 import streamlit as st
 import pandas as pd
 import requests
-import bs4
-BeautifulSoup = bs4.BeautifulSoup
+from html.parser import HTMLParser
 import re
+from typing import List, Dict
 
-def clean_text(text):
+class SEOParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.title = ""
+        self.meta_description = ""
+        self.h1s = []
+        self.h2s = []
+        self.current_tag = None
+        self.main_content = []
+        self.in_nav = False
+        self.in_header = False
+        self.in_footer = False
+        self.in_sidebar = False
+
+    def handle_starttag(self, tag, attrs):
+        self.current_tag = tag
+        attrs_dict = dict(attrs)
+        
+        if tag == 'meta' and attrs_dict.get('name') == 'description':
+            self.meta_description = attrs_dict.get('content', '')
+        elif tag in ['nav', 'header', 'footer', 'aside']:
+            setattr(self, f'in_{tag}', True)
+
+    def handle_endtag(self, tag):
+        if tag in ['nav', 'header', 'footer', 'aside']:
+            setattr(self, f'in_{tag}', False)
+        self.current_tag = None
+
+    def handle_data(self, data):
+        data = data.strip()
+        if not data:
+            return
+            
+        if self.in_nav or self.in_header or self.in_footer or self.in_sidebar:
+            return
+
+        if self.current_tag == 'title':
+            self.title = data
+        elif self.current_tag == 'h1':
+            self.h1s.append(data)
+        elif self.current_tag == 'h2':
+            self.h2s.append(data)
+        elif self.current_tag in ['p', 'div', 'span', 'article']:
+            self.main_content.append(data)
+
+def clean_text(text: str) -> str:
     """Clean text by removing extra whitespace and newlines"""
     return ' '.join(text.split())
 
-def check_keyword_presence(text, keyword):
+def check_keyword_presence(text: str, keyword: str) -> bool:
     """Check if keyword is present in text (case insensitive)"""
     if not text or not keyword:
         return False
     return keyword.lower() in text.lower()
 
-def extract_main_content(soup):
-    """Extract main content from body, excluding navigation, header, footer, etc."""
-    # Remove unwanted elements
-    for unwanted in soup.select('nav, header, footer, sidebar, .nav, .header, .footer, .sidebar, [role="navigation"]'):
-        unwanted.decompose()
-    
-    # Get remaining text from body
-    body = soup.find('body')
-    if body:
-        return clean_text(' '.join(body.stripped_strings))
-    return ""
-
-def analyze_url(url, keyword):
+def analyze_url(url: str, keyword: str) -> Dict:
     """Analyze a URL for SEO elements and keyword presence"""
     try:
         headers = {
@@ -36,26 +69,22 @@ def analyze_url(url, keyword):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        parser = SEOParser()
+        parser.feed(response.text)
         
-        # Extract SEO elements
-        title = soup.title.string if soup.title else ""
-        meta_desc = soup.find('meta', {'name': 'description'})
-        meta_desc = meta_desc['content'] if meta_desc else ""
-        h1 = soup.find('h1').get_text() if soup.find('h1') else ""
-        h2s = [h2.get_text() for h2 in soup.find_all('h2')][:5]  # Get first 5 H2s
-        h2s.extend([""] * (5 - len(h2s)))  # Pad with empty strings if less than 5 H2s
+        # Get first 5 H2s or pad with empty strings
+        h2s = parser.h2s[:5]
+        h2s.extend([''] * (5 - len(h2s)))
         
-        # Get main content
-        main_content = extract_main_content(soup)
+        main_content = ' '.join(parser.main_content)
         
         return {
-            'title': clean_text(title),
-            'title_contains': check_keyword_presence(title, keyword),
-            'meta_description': clean_text(meta_desc),
-            'meta_contains': check_keyword_presence(meta_desc, keyword),
-            'h1': clean_text(h1),
-            'h1_contains': check_keyword_presence(h1, keyword),
+            'title': clean_text(parser.title),
+            'title_contains': check_keyword_presence(parser.title, keyword),
+            'meta_description': clean_text(parser.meta_description),
+            'meta_contains': check_keyword_presence(parser.meta_description, keyword),
+            'h1': clean_text(parser.h1s[0] if parser.h1s else ''),
+            'h1_contains': check_keyword_presence(parser.h1s[0] if parser.h1s else '', keyword),
             'h2_1': clean_text(h2s[0]),
             'h2_1_contains': check_keyword_presence(h2s[0], keyword),
             'h2_2': clean_text(h2s[1]),
@@ -66,7 +95,7 @@ def analyze_url(url, keyword):
             'h2_4_contains': check_keyword_presence(h2s[3], keyword),
             'h2_5': clean_text(h2s[4]),
             'h2_5_contains': check_keyword_presence(h2s[4], keyword),
-            'main_content': main_content[:1000],  # Limit content length for display
+            'main_content': clean_text(main_content[:1000]),  # Limit content length for display
             'content_contains': check_keyword_presence(main_content, keyword)
         }
     except Exception as e:
