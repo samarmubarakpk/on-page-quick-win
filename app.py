@@ -162,6 +162,38 @@ def format_avg_position(position_str: str) -> float:
     except (ValueError, TypeError):
         return 0.0
 
+def is_valid_url(url: str) -> bool:
+    """Check if a string is a valid URL"""
+    try:
+        return bool(url and isinstance(url, str) and url.startswith('http'))
+    except:
+        return False
+
+def clean_gsc_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean GSC data by removing invalid rows and formatting numbers"""
+    # Store original length
+    original_len = len(df)
+    
+    # Filter rows with valid URLs
+    df = df[df['URL'].apply(is_valid_url)]
+    
+    # Convert clicks and impressions to numeric, replacing non-numeric with 0
+    df['Clicks'] = pd.to_numeric(df['Clicks'], errors='coerce').fillna(0).astype(int)
+    df['Impressions'] = pd.to_numeric(df['Impressions'], errors='coerce').fillna(0).astype(int)
+    
+    # Remove rows where Query is empty or non-string
+    df = df[df['Query'].notna() & df['Query'].astype(str).str.strip().astype(bool)]
+    
+    # Remove rows with obviously invalid position values
+    df = df[pd.to_numeric(df['Avg. Pos'].astype(str).str.replace(',', '').str.replace('.', ''), errors='coerce').notna()]
+    
+    # Report cleaning results
+    rows_removed = original_len - len(df)
+    if rows_removed > 0:
+        st.warning(f"Removed {rows_removed} invalid rows from the dataset (non-URL content or invalid data)")
+    
+    return df
+
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
     
@@ -183,16 +215,42 @@ def main():
     
     if uploaded_file:
         try:
-            # Read the CSV file
-            df = pd.read_csv(uploaded_file)
+            # Try different CSV reading configurations
+            try:
+                # First try with default settings
+                df = pd.read_csv(uploaded_file)
+            except pd.errors.ParserError:
+                # If that fails, try with different settings
+                uploaded_file.seek(0)  # Reset file pointer
+                df = pd.read_csv(
+                    uploaded_file,
+                    encoding='utf-8',
+                    on_bad_lines='skip',
+                    skipinitialspace=True,
+                    engine='python'
+                )
+            
             required_columns = ['Query', 'URL', 'Clicks', 'Impressions', 'Avg. Pos']
             
             if not all(col in df.columns for col in required_columns):
-                st.error("CSV file must contain: Query, URL, Clicks, Impressions, and Avg. Pos columns")
+                st.error(f"CSV file must contain these columns: {', '.join(required_columns)}")
+                st.write("Found columns:", ', '.join(df.columns))
+                return
+            
+            # Clean the data
+            df = clean_gsc_data(df)
+            
+            if len(df) == 0:
+                st.error("No valid data rows found after cleaning. Please check your CSV file.")
                 return
             
             # Format average position
             df['Avg. Pos'] = df['Avg. Pos'].apply(format_avg_position)
+            
+            # Show data preview
+            st.subheader("Data Preview")
+            st.write("First few rows of your cleaned data:")
+            st.dataframe(df.head(), use_container_width=True)
             
             # Filter out branded queries
             if branded_terms:
