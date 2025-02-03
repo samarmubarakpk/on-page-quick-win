@@ -2,93 +2,148 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+import re
 
-def is_valid_url(url):
-    try:
-        result = urlparse(url)
-        return all([result.scheme, result.netloc])
-    except:
+def clean_text(text):
+    """Clean text by removing extra whitespace and newlines"""
+    return ' '.join(text.split())
+
+def check_keyword_presence(text, keyword):
+    """Check if keyword is present in text (case insensitive)"""
+    if not text or not keyword:
         return False
+    return keyword.lower() in text.lower()
 
-def fetch_html(url):
+def extract_main_content(soup):
+    """Extract main content from body, excluding navigation, header, footer, etc."""
+    # Remove unwanted elements
+    for unwanted in soup.select('nav, header, footer, sidebar, .nav, .header, .footer, .sidebar, [role="navigation"]'):
+        unwanted.decompose()
+    
+    # Get remaining text from body
+    body = soup.find('body')
+    if body:
+        return clean_text(' '.join(body.stripped_strings))
+    return ""
+
+def analyze_url(url, keyword):
+    """Analyze a URL for SEO elements and keyword presence"""
     try:
-        response = requests.get(url, timeout=10)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        return response.text
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Extract SEO elements
+        title = soup.title.string if soup.title else ""
+        meta_desc = soup.find('meta', {'name': 'description'})
+        meta_desc = meta_desc['content'] if meta_desc else ""
+        h1 = soup.find('h1').get_text() if soup.find('h1') else ""
+        h2s = [h2.get_text() for h2 in soup.find_all('h2')][:5]  # Get first 5 H2s
+        h2s.extend([""] * (5 - len(h2s)))  # Pad with empty strings if less than 5 H2s
+        
+        # Get main content
+        main_content = extract_main_content(soup)
+        
+        return {
+            'title': clean_text(title),
+            'title_contains': check_keyword_presence(title, keyword),
+            'meta_description': clean_text(meta_desc),
+            'meta_contains': check_keyword_presence(meta_desc, keyword),
+            'h1': clean_text(h1),
+            'h1_contains': check_keyword_presence(h1, keyword),
+            'h2_1': clean_text(h2s[0]),
+            'h2_1_contains': check_keyword_presence(h2s[0], keyword),
+            'h2_2': clean_text(h2s[1]),
+            'h2_2_contains': check_keyword_presence(h2s[1], keyword),
+            'h2_3': clean_text(h2s[2]),
+            'h2_3_contains': check_keyword_presence(h2s[2], keyword),
+            'h2_4': clean_text(h2s[3]),
+            'h2_4_contains': check_keyword_presence(h2s[3], keyword),
+            'h2_5': clean_text(h2s[4]),
+            'h2_5_contains': check_keyword_presence(h2s[4], keyword),
+            'main_content': main_content[:1000],  # Limit content length for display
+            'content_contains': check_keyword_presence(main_content, keyword)
+        }
     except Exception as e:
-        st.error(f"Error fetching {url}: {str(e)}")
+        st.error(f"Error analyzing {url}: {str(e)}")
         return None
 
-def extract_seo_elements(html):
-    soup = BeautifulSoup(html, 'lxml')
+def main():
+    st.set_page_config(page_title="On Page Quick Wins", layout="wide")
     
-    # Remove navigational elements
-    for nav in soup.find_all(['header', 'footer', 'nav', 'aside', 'form']):
-        nav.decompose()
+    st.title("On Page Quick Wins")
+    st.write("Upload your GSC performance report to analyze keyword usage in your pages.")
     
-    return {
-        'title': soup.title.string if soup.title else '',
-        'meta_description': soup.find('meta', attrs={'name': 'description'})['content'] if soup.find('meta', attrs={'name': 'description'}) else '',
-        'h1': [h.get_text(strip=True) for h in soup.find_all('h1')],
-        'h2': [h.get_text(strip=True) for h in soup.find_all('h2')][:5],
-        'body_text': ' '.join(soup.find('body').stripped_strings) if soup.body else ''
-    }
-
-def check_keyword_usage(text, query):
-    return str(query).lower() in text.lower()
-
-# Streamlit UI
-st.title('SEO Query Element Analyzer')
-uploaded_file = st.file_uploader("Upload GSC Performance Report", type=['csv', 'xlsx'])
-
-if uploaded_file:
-    gsc_data = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+    uploaded_file = st.file_uploader("Upload GSC Performance Report (CSV)", type=['csv'])
     
-    # Process queries
-    top_queries = gsc_data.sort_values(
-        by=['Clicks', 'Impressions'], 
-        ascending=[False, False]
-    ).head(10)
-    
-    results = []
-    
-    for _, row in top_queries.iterrows():
-        if not is_valid_url(row['URL']):
-            continue
+    if uploaded_file:
+        try:
+            # Read the CSV file
+            df = pd.read_csv(uploaded_file)
+            required_columns = ['Query', 'URL', 'Clicks', 'Impressions']
             
-        html = fetch_html(row['URL'])
-        if not html:
-            continue
+            if not all(col in df.columns for col in required_columns):
+                st.error("CSV file must contain: Query, URL, Clicks, and Impressions columns")
+                return
             
-        seo_data = extract_seo_elements(html)
-        
-        result = {
-            'URL': row['URL'],
-            'Query': row['Query'],
-            'Clicks': row['Clicks'],
-            'Title': seo_data['title'],
-            'Title Match': check_keyword_usage(seo_data['title'], row['Query']),
-            'Meta Description': seo_data['meta_description'],
-            'Meta Match': check_keyword_usage(seo_data['meta_description'], row['Query']),
-            'H1': seo_data['h1'][0] if seo_data['h1'] else '',
-            'H1 Match': any(check_keyword_usage(h1, row['Query']) for h1 in seo_data['h1']),
-            **{f'H2-{i+1}': h2 if i < len(seo_data['h2']) else '' for i, h2 in enumerate(seo_data['h2'])},
-            **{f'H2-{i+1} Match': check_keyword_usage(h2, row['Query']) if i < len(seo_data['h2']) else False for i, h2 in enumerate(seo_data['h2'])},
-            'Body Text': seo_data['body_text'][:500] + '...' if seo_data['body_text'] else '',
-            'Body Match': check_keyword_usage(seo_data['body_text'], row['Query'])
-        }
-        
-        results.append(result)
-    
-    if results:
-        report_df = pd.DataFrame(results)
-        st.dataframe(report_df)
-        st.download_button(
-            label="Download Report",
-            data=report_df.to_csv(index=False),
-            file_name='seo_element_analysis.csv',
-            mime='text/csv'
-        )
-    else:
-        st.warning("No valid URLs processed")
+            # Sort by clicks first, then impressions for remaining slots
+            top_queries = pd.concat([
+                df.nlargest(10, 'Clicks'),
+                df[df['Clicks'] == 0].nlargest(10 - len(df[df['Clicks'] > 0]), 'Impressions')
+            ]).drop_duplicates().head(10)
+            
+            results = []
+            progress_bar = st.progress(0)
+            
+            for idx, row in top_queries.iterrows():
+                progress = (idx + 1) / len(top_queries)
+                progress_bar.progress(progress)
+                
+                analysis = analyze_url(row['URL'], row['Query'])
+                if analysis:
+                    results.append({
+                        'URL': row['URL'],
+                        'Query': row['Query'],
+                        'Clicks': row['Clicks'],
+                        'Title': analysis['title'],
+                        'Title Contains': analysis['title_contains'],
+                        'Meta Description': analysis['meta_description'],
+                        'Meta Contains': analysis['meta_contains'],
+                        'H1': analysis['h1'],
+                        'H1 Contains': analysis['h1_contains'],
+                        'H2-1': analysis['h2_1'],
+                        'H2-1 Contains': analysis['h2_1_contains'],
+                        'H2-2': analysis['h2_2'],
+                        'H2-2 Contains': analysis['h2_2_contains'],
+                        'H2-3': analysis['h2_3'],
+                        'H2-3 Contains': analysis['h2_3_contains'],
+                        'H2-4': analysis['h2_4'],
+                        'H2-4 Contains': analysis['h2_4_contains'],
+                        'H2-5': analysis['h2_5'],
+                        'H2-5 Contains': analysis['h2_5_contains'],
+                        'Copy': analysis['main_content'],
+                        'Copy Contains': analysis['content_contains']
+                    })
+            
+            if results:
+                results_df = pd.DataFrame(results)
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Export option
+                csv = results_df.to_csv(index=False)
+                st.download_button(
+                    label="Download Analysis Report",
+                    data=csv,
+                    file_name="seo_analysis_report.csv",
+                    mime="text/csv"
+                )
+            
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+
+if __name__ == "__main__":
+    main()
