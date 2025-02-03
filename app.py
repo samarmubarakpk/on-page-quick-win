@@ -1,3 +1,4 @@
+pip install -r requirements.txt --force-reinstall
 import streamlit as st
 import pandas as pd
 import requests
