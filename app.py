@@ -1,24 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-import sys
-import subprocess
-
-def install_package(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-# Try to import BeautifulSoup
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    st.warning("Installing required package: beautifulsoup4")
-    try:
-        install_package("beautifulsoup4")
-        from bs4 import BeautifulSoup
-    except Exception as e:
-        st.error(f"Failed to install beautifulsoup4: {str(e)}")
-        st.stop()
-
+from bs4 import BeautifulSoup
 import re
 
 def clean_text(text):
