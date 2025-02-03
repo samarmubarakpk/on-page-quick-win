@@ -217,25 +217,29 @@ def main():
         try:
             # Try different CSV reading configurations
             try:
-                # First try with default settings
-                df = pd.read_csv(uploaded_file, sep='\t')  # Use tab separator
+                # First try with semicolon separator
+                df = pd.read_csv(uploaded_file, sep=';')
             except pd.errors.ParserError:
                 # If that fails, try with different settings
                 uploaded_file.seek(0)  # Reset file pointer
                 df = pd.read_csv(
                     uploaded_file,
-                    sep='\t',  # Use tab separator
+                    sep=';',
                     encoding='utf-8',
                     on_bad_lines='skip',
                     skipinitialspace=True,
                     engine='python'
                 )
             
+            # Drop empty columns (columns with all NaN values)
+            df = df.dropna(axis=1, how='all')
+            
+            # Check for required columns with exact names
             required_columns = ['Query', 'Landing Page', 'Clicks', 'Impressions', 'Avg. Pos']
             
             if not all(col in df.columns for col in required_columns):
                 st.error(f"CSV file must contain these columns: {', '.join(required_columns)}")
-                st.write("Found columns:", ', '.join(df.columns))
+                st.write("Found columns:", ', '.join([col for col in df.columns if not pd.isna(col)]))
                 return
             
             # Clean the data
