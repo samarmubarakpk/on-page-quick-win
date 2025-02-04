@@ -4,66 +4,155 @@ import requests
 from typing import List, Dict
 import re
 import string
-import sys
+import html5lib
+from xml.etree import ElementTree
 
-# Try importing BeautifulSoup with detailed error handling
-try:
-    import bs4
-    from bs4 import BeautifulSoup
-except ImportError as e:
-    st.error(f"""
-    Error: Could not import BeautifulSoup. 
-    This app requires the beautifulsoup4 package.
-    
-    Technical details:
-    Python version: {sys.version}
-    Error message: {str(e)}
-    
-    Please check the app logs for more details.
-    """)
-    st.stop()
+def extract_text(element):
+    """Extract text from an element and its children"""
+    return ''.join(element.itertext()).strip()
+
+class ContentParser:
+    def __init__(self, content_wrapper=None):
+        self.h1s = []
+        self.h2s = []
+        self.paragraphs = []
+        self.content_wrapper = content_wrapper
+        self.in_wrapper = False if content_wrapper else True
+        self.skip_tags = {'script', 'style', 'nav', 'header', 'footer'}
+        self.in_skip = False
+        self.current_content = []
+        
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        
+        # Skip unwanted sections
+        if tag in self.skip_tags:
+            self.in_skip = True
+            return
+            
+        if self.in_skip:
+            return
+            
+        # Handle content wrapper
+        if self.content_wrapper and tag == 'div' and 'class' in attrs:
+            classes = attrs['class'].split()
+            if self.content_wrapper in classes:
+                self.in_wrapper = True
+                
+        self.current_tag = tag
+        self.current_content = []
+        
+    def handle_endtag(self, tag):
+        if tag in self.skip_tags:
+            self.in_skip = False
+            return
+            
+        if self.in_skip:
+            return
+            
+        if not self.in_wrapper:
+            return
+            
+        content = ''.join(self.current_content).strip()
+        if content:
+            if tag == 'h1':
+                self.h1s.append(content)
+            elif tag == 'h2':
+                self.h2s.append(content)
+            elif tag in ('p', 'li'):
+                self.paragraphs.append(content)
+                
+        self.current_tag = None
+        self.current_content = []
+        
+    def handle_data(self, data):
+        if self.in_skip:
+            return
+            
+        if not self.in_wrapper:
+            return
+            
+        if self.current_tag in ('h1', 'h2', 'p', 'li'):
+            self.current_content.append(data.strip())
+            
+    def get_content(self):
+        return {
+            'h1': self.h1s,
+            'h2': self.h2s,
+            'content': ' '.join(self.paragraphs)
+        }
 
 def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
-    """Scrape content from a URL using BeautifulSoup"""
+    """Scrape content from a URL using HTMLParser"""
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        parser = ContentParser(content_wrapper_class)
+        parser.feed(response.text)
+        
+        return parser.get_content()
+        
+    except Exception as e:
+        st.error(f"Error scraping {url}: {str(e)}")
+        return {'h1': [], 'h2': [], 'content': ''}
+
+def scrape_content_html5lib(url: str, content_wrapper_class: str = None) -> Dict:
+    """Scrape content from a URL using html5lib"""
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        response.raise_for_status()
+        
+        # Parse HTML with html5lib
+        document = html5lib.parse(response.text, namespaceHTMLElements=False)
         
         # Initialize results
         results = {
             'h1': [],
             'h2': [],
-            'content': ''
+            'content': []
         }
         
-        # Find content area based on wrapper class if specified
-        content_area = None
+        # Find content wrapper if specified
         if content_wrapper_class:
-            content_area = soup.find('div', class_=content_wrapper_class)
-        
-        if content_area:
-            # Extract content from specified wrapper
-            results['h1'] = [h1.get_text(strip=True) for h1 in content_area.find_all('h1')]
-            results['h2'] = [h2.get_text(strip=True) for h2 in content_area.find_all('h2')]
-            paragraphs = [p.get_text(strip=True) for p in content_area.find_all(['p', 'li'])]
+            wrapper = None
+            for elem in document.iter('div'):
+                if elem.get('class') and content_wrapper_class in elem.get('class').split():
+                    wrapper = elem
+                    break
+            root = wrapper if wrapper else document
         else:
-            # Extract from main content, excluding navigation/header/footer
-            main_content = soup.find('body')
-            if main_content:
-                # Exclude navigation, header, and footer content
-                for elem in main_content.find_all(['nav', 'header', 'footer']):
-                    elem.decompose()
-                
-                results['h1'] = [h1.get_text(strip=True) for h1 in main_content.find_all('h1')]
-                results['h2'] = [h2.get_text(strip=True) for h2 in main_content.find_all('h2')]
-                paragraphs = [p.get_text(strip=True) for p in main_content.find_all(['p', 'li'])]
-            else:
-                paragraphs = []
+            root = document
+            
+        # Remove unwanted elements
+        for elem in root.findall('.//script'):
+            elem.clear()
+        for elem in root.findall('.//style'):
+            elem.clear()
+        for elem in root.findall('.//nav'):
+            elem.clear()
+        for elem in root.findall('.//header'):
+            elem.clear()
+        for elem in root.findall('.//footer'):
+            elem.clear()
+            
+        # Extract content
+        for elem in root.iter():
+            if elem.tag == 'h1':
+                text = extract_text(elem)
+                if text:
+                    results['h1'].append(text)
+            elif elem.tag == 'h2':
+                text = extract_text(elem)
+                if text:
+                    results['h2'].append(text)
+            elif elem.tag in ('p', 'li'):
+                text = extract_text(elem)
+                if text:
+                    results['content'].append(text)
         
-        # Join paragraphs into content
-        results['content'] = ' '.join(p for p in paragraphs if p)
+        # Join content
+        results['content'] = ' '.join(results['content'])
         
         return results
         
@@ -74,7 +163,7 @@ def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
 def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
     """Analyze a URL for SEO elements and keyword usage"""
     try:
-        content = scrape_content(url, content_wrapper)
+        content = scrape_content_html5lib(url, content_wrapper)
         
         # Clean and prepare query
         clean_query = clean_to_english(query.lower())
