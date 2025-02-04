@@ -22,91 +22,6 @@ def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
-
-class ContentParser(HTMLParser):
-    def __init__(self, content_wrapper=None):
-        super().__init__()
-        self.reset()
-        self.strict = False
-        self.convert_charrefs = True
-        self.text = []
-        self.current_tag = None
-        self.h1s = []
-        self.h2s = []
-        self.paragraphs = []
-        self.content_wrapper = content_wrapper
-        self.in_wrapper = False if content_wrapper else True
-        self.skip_tags = {'script', 'style', 'nav', 'header', 'footer'}
-        self.in_skip = False
-        self.current_content = []
-        
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        
-        # Skip unwanted sections
-        if tag in self.skip_tags:
-            self.in_skip = True
-            return
-            
-        if self.in_skip:
-            return
-            
-        # Handle content wrapper
-        if self.content_wrapper and tag == 'div' and 'class' in attrs:
-            classes = attrs['class'].split()
-            if self.content_wrapper in classes:
-                self.in_wrapper = True
-                
-        self.current_tag = tag
-        self.current_content = []
-        
-    def handle_endtag(self, tag):
-        if tag in self.skip_tags:
-            self.in_skip = False
-            return
-            
-        if self.in_skip:
-            return
-            
-        if not self.in_wrapper:
-            return
-            
-        content = ''.join(self.current_content).strip()
-        if content:
-            if tag == 'h1':
-                self.h1s.append(content)
-            elif tag == 'h2':
-                self.h2s.append(content)
-            elif tag in ('p', 'li'):
-                self.paragraphs.append(content)
-                
-        self.current_tag = None
-        self.current_content = []
-        
-    def handle_data(self, data):
-        if self.in_skip:
-            return
-            
-        if not self.in_wrapper:
-            return
-            
-        if self.current_tag in ('h1', 'h2', 'p', 'li'):
-            self.current_content.append(data.strip())
-            
-    def get_content(self):
-        return {
-            'h1': self.h1s,
-            'h2': self.h2s,
-            'content': ' '.join(self.paragraphs)
-        }
-
-def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
-    """Scrape content from a URL"""
-    try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
         
         # Initialize results
         results = {
@@ -179,11 +94,11 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
                 sent for sent in sentences
                 if sent and any(word in sent.lower() for word in query_words)
             ]
-            
+        
         return {
             'h1_matches': h1_matches,
             'h2_matches': h2_matches,
-            'content_matches': content_matches[:5],
+            'content_matches': content_matches[:5],  # Show top 5 matches
             'has_content': bool(content['content'])
         }
         
@@ -197,35 +112,34 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
         }
 
 def clean_to_english(text: str) -> str:
-    """Remove non-English characters and clean the text"""
-    if not text:
-        return ""
-    
-    # Define valid characters (English letters, numbers, and basic punctuation)
-    valid_chars = string.ascii_letters + string.digits + string.punctuation + ' '
-    
-    # Replace common Unicode quotes and dashes with ASCII equivalents
-    replacements = {
-        '"': '"',  # Smart quotes
-        '"': '"',
-        ''': "'",  # Smart apostrophes
-        ''': "'",
-        '–': '-',  # En dash
-        '—': '-',  # Em dash
-        '…': '...' # Ellipsis
-    }
-    
-    # Apply replacements
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    
-    # Keep only valid characters
-    text = ''.join(c for c in text if c in valid_chars)
-    
-    # Clean up whitespace
-    text = ' '.join(text.split())
-    
-    return text
+    """Clean text to basic English characters"""
+    # Remove punctuation except periods for sentence splitting
+    translator = str.maketrans('', '', string.punctuation.replace('.', ''))
+    return text.translate(translator)
+
+def is_branded_query(query: str, branded_terms: List[str]) -> bool:
+    """Check if a query contains branded terms"""
+    if not branded_terms:
+        return False
+        
+    query_clean = clean_to_english(query.lower())
+    return any(
+        clean_to_english(term.lower()) in query_clean
+        for term in branded_terms
+    )
+
+def format_average_position(pos: str) -> float:
+    """Format average position to decimal"""
+    try:
+        if isinstance(pos, (int, float)):
+            return float(pos)
+        if isinstance(pos, str):
+            # Remove any non-numeric characters except decimal point
+            clean_pos = ''.join(c for c in pos if c.isdigit() or c == '.')
+            return float(clean_pos) if clean_pos else 0.0
+        return 0.0
+    except (ValueError, TypeError):
+        return 0.0
 
 def convert_to_numeric(series):
     """Safely convert a series to numeric, handling both string and numeric inputs"""
@@ -236,24 +150,6 @@ def convert_to_numeric(series):
 def clean_text(text: str) -> str:
     """Clean text by removing extra whitespace and newlines"""
     return ' '.join(text.split())
-
-def is_branded_query(query: str, branded_terms: List[str]) -> bool:
-    """Check if a query contains any branded terms"""
-    if not query or not branded_terms:
-        return False
-        
-    # Clean and prepare query
-    query = clean_to_english(query.lower().strip())
-    
-    # Clean and prepare branded terms
-    cleaned_terms = [
-        clean_to_english(term.lower().strip())
-        for term in branded_terms
-        if term and term.strip()
-    ]
-    
-    # Check if any cleaned branded term is in the query
-    return any(term in query for term in cleaned_terms if term)
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
