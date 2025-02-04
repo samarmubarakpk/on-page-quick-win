@@ -8,37 +8,33 @@ import html
 import string
 
 class SEOParser(HTMLParser):
-    def __init__(self, content_wrapper=None):
+    def __init__(self, content_wrapper_class=None):
         super().__init__()
+        self.content_wrapper_class = content_wrapper_class
+        self.recording = False if content_wrapper_class else True
+        self.data = []
+        self.current_tag = None
+        self.current_attrs = None
+        self.inside_wrapper = False
+        self.tag_stack = []
         self.title = ""
         self.meta_description = ""
         self.h1 = []
         self.h2 = []
         self.main_content = []
-        self.current_tag = None
-        self.reading_content = False
-        self.content_wrapper = content_wrapper
-        self.in_wrapper = False if content_wrapper else True  # If no wrapper specified, always collect content
         self.skip_tags = {'script', 'style', 'nav', 'header', 'footer', 'iframe', 'noscript'}
         self.current_skip = False
-        self.wrapper_depth = 0  # Track nested divs within wrapper
-    
+        
     def handle_starttag(self, tag, attrs):
-        if self.current_skip:
-            return
-            
         self.current_tag = tag
-        attrs_dict = dict(attrs)
+        self.current_attrs = dict(attrs)
+        self.tag_stack.append((tag, self.current_attrs))
         
         # Check if we're entering the content wrapper
-        if self.content_wrapper and tag == 'div':
-            if 'class' in attrs_dict:
-                classes = attrs_dict['class'].split()
-                if self.content_wrapper in classes:
-                    self.in_wrapper = True
-                    self.wrapper_depth = 1
-                elif self.in_wrapper:
-                    self.wrapper_depth += 1
+        if self.content_wrapper_class:
+            if tag == 'div' and any(attr[0] == 'class' and self.content_wrapper_class in attr[1] for attr in attrs):
+                self.inside_wrapper = True
+                self.recording = True
         
         # Skip unwanted elements
         if tag in self.skip_tags:
@@ -46,23 +42,21 @@ class SEOParser(HTMLParser):
             return
         
         if tag == 'title':
-            self.reading_content = True
-        elif tag == 'meta' and attrs_dict.get('name', '').lower() == 'description':
-            self.meta_description = attrs_dict.get('content', '')
+            self.recording = True
+        elif tag == 'meta' and self.current_attrs.get('name', '').lower() == 'description':
+            self.meta_description = self.current_attrs.get('content', '')
     
     def handle_endtag(self, tag):
-        if tag in self.skip_tags:
-            self.current_skip = False
-            return
-        
-        # Check if we're exiting the content wrapper
-        if self.content_wrapper and tag == 'div' and self.in_wrapper:
-            self.wrapper_depth -= 1
-            if self.wrapper_depth == 0:
-                self.in_wrapper = False
+        if self.tag_stack:
+            self.tag_stack.pop()
+            # Check if we're exiting the content wrapper
+            if self.content_wrapper_class and tag == 'div' and self.inside_wrapper:
+                if not any(t[0] == 'div' and any(self.content_wrapper_class in a[1] for a in t[1].items() if a[0] == 'class') for t in self.tag_stack):
+                    self.inside_wrapper = False
+                    self.recording = False
         
         if tag == 'title':
-            self.reading_content = False
+            self.recording = False
         self.current_tag = None
     
     def handle_data(self, data):
@@ -73,25 +67,30 @@ class SEOParser(HTMLParser):
         if not data:
             return
         
-        if self.reading_content and self.current_tag == 'title':
+        if self.recording and self.current_tag == 'title':
             self.title = data
         elif self.current_tag == 'h1':
             self.h1.append(data)
         elif self.current_tag == 'h2':
             self.h2.append(data)
         # Only collect main content if we're in the wrapper (or if no wrapper specified)
-        elif self.in_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
-            self.main_content.append(data)
+        elif self.inside_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
+            cleaned_data = ' '.join(data.split())
+            if cleaned_data:
+                self.main_content.append(cleaned_data)
     
     def handle_entityref(self, name):
         # Handle HTML entities like &amp; &quot; etc.
-        if self.in_wrapper and not self.current_skip:
+        if self.inside_wrapper and not self.current_skip:
             self.main_content.append(f"&{name};")
     
     def handle_charref(self, name):
         # Handle numeric character references like &#39;
-        if self.in_wrapper and not self.current_skip:
+        if self.inside_wrapper and not self.current_skip:
             self.main_content.append(f"&#{name};")
+
+    def get_data(self):
+        return ' '.join(self.main_content)
 
 def clean_to_english(text: str) -> str:
     """Remove non-English characters and clean the text"""
@@ -139,7 +138,7 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
         h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
         
         # Join main content with spaces, properly decode HTML entities, clean it, and filter to English
-        main_content = ' '.join(parser.main_content)
+        main_content = parser.get_data()
         main_content = html.unescape(main_content)  # Properly decode HTML entities
         main_content = clean_to_english(main_content)  # Filter to English characters
         
@@ -270,8 +269,8 @@ def format_ctr(value: float) -> str:
     except (ValueError, TypeError):
         return "0.00%"
 
-def format_avg_position(position_str: str) -> float:
-    """Format average position to have correct decimal places"""
+def format_avg_position(position_str: str) -> int:
+    """Format average position to have correct decimal places and round to integer"""
     try:
         # Remove any commas or dots from the string
         clean_str = str(position_str).replace(',', '').replace('.', '')
@@ -282,14 +281,14 @@ def format_avg_position(position_str: str) -> float:
         # If it starts with a single digit (1-9)
         if len(first_digits) == 1 or (len(first_digits) == 2 and first_digits[0] == '0'):
             # Take first digit and next digit as decimal
-            return round(float(f"{first_digits[0]}.{clean_str[1]}"), 1)
+            return round(float(f"{first_digits[0]}.{clean_str[1]}"))
         else:
             # For numbers starting with 2 or more digits
             # Take first two digits and third digit as decimal
-            return round(float(f"{first_digits}.{clean_str[2]}"), 1)
+            return round(float(f"{first_digits}.{clean_str[2]}"))
             
     except (ValueError, TypeError, IndexError):
-        return 0.0
+        return 0
 
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
@@ -364,10 +363,12 @@ def main():
                     st.write("Found columns:", ', '.join(df.columns))
                     return
                 
-                # Convert numeric columns safely
+                # Format Avg. Pos first before any other numeric conversions
+                df['Avg. Pos'] = df['Avg. Pos'].apply(format_avg_position)
+                
+                # Convert other numeric columns safely
                 df['Clicks'] = convert_to_numeric(df['Clicks'])
                 df['Impressions'] = convert_to_numeric(df['Impressions'])
-                df['Avg. Pos'] = convert_to_numeric(df['Avg. Pos'])
                 
                 # Drop rows with invalid numeric values
                 df = df.dropna(subset=['Clicks', 'Impressions', 'Avg. Pos'])
