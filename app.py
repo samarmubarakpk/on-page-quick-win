@@ -8,33 +8,37 @@ import html
 import string
 
 class SEOParser(HTMLParser):
-    def __init__(self, content_wrapper_class=None):
+    def __init__(self, content_wrapper=None):
         super().__init__()
-        self.content_wrapper_class = content_wrapper_class
-        self.recording = False if content_wrapper_class else True
-        self.data = []
-        self.current_tag = None
-        self.current_attrs = None
-        self.inside_wrapper = False
-        self.tag_stack = []
         self.title = ""
         self.meta_description = ""
         self.h1 = []
         self.h2 = []
         self.main_content = []
+        self.current_tag = None
+        self.reading_content = False
+        self.content_wrapper = content_wrapper
+        self.in_wrapper = False if content_wrapper else True  # If no wrapper specified, always collect content
         self.skip_tags = {'script', 'style', 'nav', 'header', 'footer', 'iframe', 'noscript'}
         self.current_skip = False
-        
+        self.wrapper_depth = 0  # Track nested divs within wrapper
+    
     def handle_starttag(self, tag, attrs):
+        if self.current_skip:
+            return
+            
         self.current_tag = tag
-        self.current_attrs = dict(attrs)
-        self.tag_stack.append((tag, self.current_attrs))
+        attrs_dict = dict(attrs)
         
         # Check if we're entering the content wrapper
-        if self.content_wrapper_class:
-            if tag == 'div' and any(attr[0] == 'class' and self.content_wrapper_class in attr[1] for attr in attrs):
-                self.inside_wrapper = True
-                self.recording = True
+        if self.content_wrapper and tag == 'div':
+            if 'class' in attrs_dict:
+                classes = attrs_dict['class'].split()
+                if self.content_wrapper in classes:
+                    self.in_wrapper = True
+                    self.wrapper_depth = 1
+                elif self.in_wrapper:
+                    self.wrapper_depth += 1
         
         # Skip unwanted elements
         if tag in self.skip_tags:
@@ -42,21 +46,23 @@ class SEOParser(HTMLParser):
             return
         
         if tag == 'title':
-            self.recording = True
-        elif tag == 'meta' and self.current_attrs.get('name', '').lower() == 'description':
-            self.meta_description = self.current_attrs.get('content', '')
+            self.reading_content = True
+        elif tag == 'meta' and attrs_dict.get('name', '').lower() == 'description':
+            self.meta_description = attrs_dict.get('content', '')
     
     def handle_endtag(self, tag):
-        if self.tag_stack:
-            self.tag_stack.pop()
-            # Check if we're exiting the content wrapper
-            if self.content_wrapper_class and tag == 'div' and self.inside_wrapper:
-                if not any(t[0] == 'div' and any(self.content_wrapper_class in a[1] for a in t[1].items() if a[0] == 'class') for t in self.tag_stack):
-                    self.inside_wrapper = False
-                    self.recording = False
+        if tag in self.skip_tags:
+            self.current_skip = False
+            return
+        
+        # Check if we're exiting the content wrapper
+        if self.content_wrapper and tag == 'div' and self.in_wrapper:
+            self.wrapper_depth -= 1
+            if self.wrapper_depth == 0:
+                self.in_wrapper = False
         
         if tag == 'title':
-            self.recording = False
+            self.reading_content = False
         self.current_tag = None
     
     def handle_data(self, data):
@@ -67,30 +73,58 @@ class SEOParser(HTMLParser):
         if not data:
             return
         
-        if self.recording and self.current_tag == 'title':
+        if self.reading_content and self.current_tag == 'title':
             self.title = data
         elif self.current_tag == 'h1':
             self.h1.append(data)
         elif self.current_tag == 'h2':
             self.h2.append(data)
         # Only collect main content if we're in the wrapper (or if no wrapper specified)
-        elif self.inside_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
-            cleaned_data = ' '.join(data.split())
-            if cleaned_data:
-                self.main_content.append(cleaned_data)
+        elif self.in_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
+            self.main_content.append(data)
     
     def handle_entityref(self, name):
         # Handle HTML entities like &amp; &quot; etc.
-        if self.inside_wrapper and not self.current_skip:
+        if self.in_wrapper and not self.current_skip:
             self.main_content.append(f"&{name};")
     
     def handle_charref(self, name):
         # Handle numeric character references like &#39;
-        if self.inside_wrapper and not self.current_skip:
+        if self.in_wrapper and not self.current_skip:
             self.main_content.append(f"&#{name};")
 
     def get_data(self):
         return ' '.join(self.main_content)
+
+def scrape_content(url: str, content_wrapper_class: str = None) -> dict:
+    """Scrape content from a URL, optionally within a specific class wrapper"""
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        response.raise_for_status()
+        
+        parser = SEOParser(content_wrapper_class)
+        parser.feed(response.text)
+        
+        # Get the first 5 H1s and H2s, pad with empty strings if less than 5
+        h1s = parser.h1[:5] + [''] * (5 - len(parser.h1))
+        h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
+        
+        # Join main content with spaces and properly decode HTML entities
+        main_content = ' '.join(parser.main_content)
+        main_content = html.unescape(main_content)  # Properly decode HTML entities
+        main_content = clean_to_english(main_content)  # Filter to English characters
+        
+        return {
+            'title': parser.title,
+            'meta_description': parser.meta_description,
+            'h1': h1s,
+            'h2': h2s,
+            'content': main_content,
+            'url': url
+        }
+        
+    except Exception as e:
+        return {'error': str(e), 'url': url}
 
 def clean_to_english(text: str) -> str:
     """Remove non-English characters and clean the text"""
