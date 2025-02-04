@@ -4,6 +4,7 @@ import requests
 from html.parser import HTMLParser
 import re
 from typing import List, Dict
+import html
 
 class SEOParser(HTMLParser):
     def __init__(self, content_wrapper=None):
@@ -19,16 +20,24 @@ class SEOParser(HTMLParser):
         self.in_wrapper = False if content_wrapper else True  # If no wrapper specified, always collect content
         self.skip_tags = {'script', 'style', 'nav', 'header', 'footer', 'iframe', 'noscript'}
         self.current_skip = False
+        self.wrapper_depth = 0  # Track nested divs within wrapper
     
     def handle_starttag(self, tag, attrs):
+        if self.current_skip:
+            return
+            
         self.current_tag = tag
         attrs_dict = dict(attrs)
         
         # Check if we're entering the content wrapper
-        if self.content_wrapper and tag == 'div' and 'class' in attrs_dict:
-            classes = attrs_dict['class'].split()
-            if self.content_wrapper in classes:
-                self.in_wrapper = True
+        if self.content_wrapper and tag == 'div':
+            if 'class' in attrs_dict:
+                classes = attrs_dict['class'].split()
+                if self.content_wrapper in classes:
+                    self.in_wrapper = True
+                    self.wrapper_depth = 1
+                elif self.in_wrapper:
+                    self.wrapper_depth += 1
         
         # Skip unwanted elements
         if tag in self.skip_tags:
@@ -43,10 +52,13 @@ class SEOParser(HTMLParser):
     def handle_endtag(self, tag):
         if tag in self.skip_tags:
             self.current_skip = False
+            return
         
         # Check if we're exiting the content wrapper
         if self.content_wrapper and tag == 'div' and self.in_wrapper:
-            self.in_wrapper = False
+            self.wrapper_depth -= 1
+            if self.wrapper_depth == 0:
+                self.in_wrapper = False
         
         if tag == 'title':
             self.reading_content = False
@@ -69,6 +81,16 @@ class SEOParser(HTMLParser):
         # Only collect main content if we're in the wrapper (or if no wrapper specified)
         elif self.in_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
             self.main_content.append(data)
+    
+    def handle_entityref(self, name):
+        # Handle HTML entities like &amp; &quot; etc.
+        if self.in_wrapper and not self.current_skip:
+            self.main_content.append(f"&{name};")
+    
+    def handle_charref(self, name):
+        # Handle numeric character references like &#39;
+        if self.in_wrapper and not self.current_skip:
+            self.main_content.append(f"&#{name};")
 
 def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
     """Analyze a URL for SEO elements and keyword usage"""
@@ -84,8 +106,10 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
         # Get the first 5 H2s or empty strings if not enough
         h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
         
-        # Join main content with spaces and clean it
-        main_content = ' '.join(parser.main_content).strip()
+        # Join main content with spaces, properly decode HTML entities, and clean it
+        main_content = ' '.join(parser.main_content)
+        main_content = html.unescape(main_content)  # Properly decode HTML entities
+        main_content = ' '.join(main_content.split())  # Clean up whitespace
         
         # Function to check if query appears in text (case insensitive)
         def contains_query(text):
