@@ -203,9 +203,31 @@ def scrape_content_html5lib(url: str, content_wrapper_class: str = None) -> Dict
         return {'h1': [], 'h2': [], 'content': ''}
 
 def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
-    """Analyze a URL for SEO elements and keyword usage"""
+    """Analyze a URL for SEO elements and keyword usage with improved error handling"""
     try:
+        # Initialize default response structure
+        default_response = {
+            'url': url,  # Add URL to response for error tracking
+            'h1_matches': [],
+            'h2_matches': [],
+            'content_matches': [],
+            'has_content': False,
+            'error': None  # Add error field
+        }
+        
+        # Attempt to scrape content
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        
+        # Check for HTTP errors
+        if response.status_code != 200:
+            default_response['error'] = f"{response.status_code} {response.reason}"
+            return default_response
+            
         content = scrape_content(url, content_wrapper)
+        
+        if not content or not any([content['h1'], content['h2'], content['content']]):
+            default_response['error'] = "No content found"
+            return default_response
         
         # Clean and prepare query
         clean_query = clean_to_english(query.lower())
@@ -235,21 +257,23 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
             ]
         
         return {
+            'url': url,
             'h1_matches': h1_matches,
             'h2_matches': h2_matches,
             'content_matches': content_matches[:5],  # Show top 5 matches
-            'has_content': bool(content['content'])
+            'has_content': bool(content['content']),
+            'error': None
         }
         
+    except requests.exceptions.RequestException as e:
+        # Handle network/request errors
+        default_response['error'] = f"Request error: {str(e)}"
+        return default_response
     except Exception as e:
-        st.error(f"Error analyzing {url}: {str(e)}")
-        return {
-            'h1_matches': [],
-            'h2_matches': [],
-            'content_matches': [],
-            'has_content': False
-        }
-
+        # Handle any other unexpected errors
+        default_response['error'] = f"Error: {str(e)}"
+        return default_response
+    
 def clean_to_english(text: str) -> str:
     """Clean text to basic English characters"""
     # Remove punctuation except periods for sentence splitting
