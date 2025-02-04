@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-import sys
-import subprocess
 from typing import List, Dict
 import re
 import string
@@ -10,11 +8,15 @@ import string
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    st.error("""
-    BeautifulSoup4 is required but not installed. 
-    Please make sure beautifulsoup4 is listed in requirements.txt and redeploy the app.
-    """)
-    st.stop()
+    try:
+        import bs4
+        BeautifulSoup = bs4.BeautifulSoup
+    except ImportError:
+        st.error("""
+        BeautifulSoup4 is required but not installed. 
+        Please make sure both bs4 and beautifulsoup4 are listed in requirements.txt and redeploy the app.
+        """)
+        st.stop()
 
 def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
     """Scrape content from a URL using BeautifulSoup"""
@@ -22,7 +24,11 @@ def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Try lxml parser first, fall back to html.parser if lxml fails
+        try:
+            soup = BeautifulSoup(response.text, 'lxml')
+        except:
+            soup = BeautifulSoup(response.text, 'html.parser')
         
         # Initialize results
         results = {
