@@ -1,4 +1,6 @@
 streamlit==1.31.0
 requests==2.31.0
 pandas==2.0.3
-beautifulsoup4
+beautifulsoup4==4.12.3
+soupsieve>=1.2
+bs4==0.0.1
