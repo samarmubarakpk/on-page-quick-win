@@ -5,6 +5,7 @@ from typing import List, Dict
 import re
 import string
 from selectolax.parser import HTMLParser
+import html5lib
 
 def extract_text(element):
     """Extract text from an element and its children"""
