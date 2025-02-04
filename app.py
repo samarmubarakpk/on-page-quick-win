@@ -4,7 +4,7 @@ import requests
 from typing import List, Dict
 import re
 import string
-from lxml import html, etree
+from selectolax.parser import HTMLParser
 
 def extract_text(element):
     """Extract text from an element and its children"""
@@ -82,13 +82,13 @@ class ContentParser:
         }
 
 def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
-    """Scrape content from a URL using lxml"""
+    """Scrape content from a URL using selectolax"""
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         response.raise_for_status()
         
-        # Parse HTML with lxml
-        tree = html.fromstring(response.text)
+        # Parse HTML with selectolax
+        tree = HTMLParser(response.text)
         
         # Initialize results
         results = {
@@ -99,33 +99,34 @@ def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
         
         # Find content area based on wrapper class if specified
         if content_wrapper_class:
-            content_areas = tree.xpath(f"//div[contains(@class, '{content_wrapper_class}')]")
-            root = content_areas[0] if content_areas else tree
+            content_area = tree.css_first(f'div.{content_wrapper_class}')
+            root = content_area if content_area else tree
         else:
             root = tree
             
         # Remove unwanted elements
-        for elem in root.xpath('.//script | .//style | .//nav | .//header | .//footer'):
-            elem.getparent().remove(elem)
+        for selector in ['script', 'style', 'nav', 'header', 'footer']:
+            for elem in root.css(selector):
+                elem.remove()
         
-        # Extract content using XPath
+        # Extract content
         results['h1'] = [
-            text.strip() 
-            for text in root.xpath('.//h1/text()')
-            if text.strip()
+            node.text().strip()
+            for node in root.css('h1')
+            if node.text().strip()
         ]
         
         results['h2'] = [
-            text.strip() 
-            for text in root.xpath('.//h2/text()')
-            if text.strip()
+            node.text().strip()
+            for node in root.css('h2')
+            if node.text().strip()
         ]
         
         # Get paragraphs and list items
         content_texts = [
-            text.strip()
-            for text in root.xpath('.//p/text() | .//li/text()')
-            if text.strip()
+            node.text().strip()
+            for node in root.css('p, li')
+            if node.text().strip()
         ]
         
         # Join content
