@@ -4,8 +4,7 @@ import requests
 from typing import List, Dict
 import re
 import string
-import html5lib
-from xml.etree import ElementTree
+from lxml import html, etree
 
 def extract_text(element):
     """Extract text from an element and its children"""
@@ -83,15 +82,56 @@ class ContentParser:
         }
 
 def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
-    """Scrape content from a URL using HTMLParser"""
+    """Scrape content from a URL using lxml"""
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         response.raise_for_status()
         
-        parser = ContentParser(content_wrapper_class)
-        parser.feed(response.text)
+        # Parse HTML with lxml
+        tree = html.fromstring(response.text)
         
-        return parser.get_content()
+        # Initialize results
+        results = {
+            'h1': [],
+            'h2': [],
+            'content': []
+        }
+        
+        # Find content area based on wrapper class if specified
+        if content_wrapper_class:
+            content_areas = tree.xpath(f"//div[contains(@class, '{content_wrapper_class}')]")
+            root = content_areas[0] if content_areas else tree
+        else:
+            root = tree
+            
+        # Remove unwanted elements
+        for elem in root.xpath('.//script | .//style | .//nav | .//header | .//footer'):
+            elem.getparent().remove(elem)
+        
+        # Extract content using XPath
+        results['h1'] = [
+            text.strip() 
+            for text in root.xpath('.//h1/text()')
+            if text.strip()
+        ]
+        
+        results['h2'] = [
+            text.strip() 
+            for text in root.xpath('.//h2/text()')
+            if text.strip()
+        ]
+        
+        # Get paragraphs and list items
+        content_texts = [
+            text.strip()
+            for text in root.xpath('.//p/text() | .//li/text()')
+            if text.strip()
+        ]
+        
+        # Join content
+        results['content'] = ' '.join(content_texts)
+        
+        return results
         
     except Exception as e:
         st.error(f"Error scraping {url}: {str(e)}")
@@ -163,7 +203,7 @@ def scrape_content_html5lib(url: str, content_wrapper_class: str = None) -> Dict
 def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
     """Analyze a URL for SEO elements and keyword usage"""
     try:
-        content = scrape_content_html5lib(url, content_wrapper)
+        content = scrape_content(url, content_wrapper)
         
         # Clean and prepare query
         clean_query = clean_to_english(query.lower())
