@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 from html.parser import HTMLParser
 import re
 from typing import List, Dict
@@ -102,60 +103,36 @@ def scrape_content(url: str, content_wrapper_class: str = None) -> dict:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         response.raise_for_status()
         
-        parser = SEOParser(content_wrapper_class)
-        parser.feed(response.text)
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Get the first 5 H1s and H2s, pad with empty strings if less than 5
-        h1s = parser.h1[:5] + [''] * (5 - len(parser.h1))
-        h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
+        # Get all H2s from the main content area, excluding navigation/footer
+        content_area = soup.find('div', {'class': 'blog-post-content'}) if not content_wrapper_class else soup.find('div', {'class': content_wrapper_class})
+        if content_area:
+            h2s = content_area.find_all('h2')
+        else:
+            # Fallback to all H2s if content area not found, excluding nav/header/footer
+            h2s = [h2 for h2 in soup.find_all('h2') 
+                  if not any(parent.name in ['nav', 'header', 'footer'] 
+                           for parent in h2.parents)]
         
-        # Join main content with spaces and properly decode HTML entities
-        main_content = ' '.join(parser.main_content)
-        main_content = html.unescape(main_content)  # Properly decode HTML entities
-        main_content = clean_to_english(main_content)  # Filter to English characters
+        # Extract text from all H2s
+        h2_texts = [h2.get_text(strip=True) for h2 in h2s if h2.get_text(strip=True)]
         
+        # Get main content
+        if content_area:
+            content = ' '.join(p.get_text(strip=True) for p in content_area.find_all(['p', 'li']))
+        else:
+            content = ''
+            
         return {
-            'title': parser.title,
-            'meta_description': parser.meta_description,
-            'h1': h1s,
-            'h2': h2s,
-            'content': main_content,
+            'h1': [],  # We'll handle H1s separately
+            'h2': h2_texts,  # Return all H2s found
+            'content': content,
             'url': url
         }
         
     except Exception as e:
         return {'error': str(e), 'url': url}
-
-def clean_to_english(text: str) -> str:
-    """Remove non-English characters and clean the text"""
-    if not text:
-        return ""
-    
-    # Define valid characters (English letters, numbers, and basic punctuation)
-    valid_chars = string.ascii_letters + string.digits + string.punctuation + ' '
-    
-    # Replace common Unicode quotes and dashes with ASCII equivalents
-    replacements = {
-        '"': '"',  # Smart quotes
-        '"': '"',
-        ''': "'",  # Smart apostrophes
-        ''': "'",
-        '–': '-',  # En dash
-        '—': '-',  # Em dash
-        '…': '...' # Ellipsis
-    }
-    
-    # Apply replacements
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    
-    # Keep only valid characters
-    text = ''.join(c for c in text if c in valid_chars)
-    
-    # Clean up whitespace
-    text = ' '.join(text.split())
-    
-    return text
 
 def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
     """Analyze a URL for SEO elements and keyword usage"""
@@ -213,6 +190,37 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
         return {'error': str(e), 'url': url}
     except Exception as e:
         return {'error': str(e), 'url': url}
+
+def clean_to_english(text: str) -> str:
+    """Remove non-English characters and clean the text"""
+    if not text:
+        return ""
+    
+    # Define valid characters (English letters, numbers, and basic punctuation)
+    valid_chars = string.ascii_letters + string.digits + string.punctuation + ' '
+    
+    # Replace common Unicode quotes and dashes with ASCII equivalents
+    replacements = {
+        '"': '"',  # Smart quotes
+        '"': '"',
+        ''': "'",  # Smart apostrophes
+        ''': "'",
+        '–': '-',  # En dash
+        '—': '-',  # Em dash
+        '…': '...' # Ellipsis
+    }
+    
+    # Apply replacements
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    # Keep only valid characters
+    text = ''.join(c for c in text if c in valid_chars)
+    
+    # Clean up whitespace
+    text = ' '.join(text.split())
+    
+    return text
 
 def convert_to_numeric(series):
     """Safely convert a series to numeric, handling both string and numeric inputs"""
@@ -306,20 +314,27 @@ def format_ctr(value: float) -> str:
 def format_avg_position(position_str: str) -> int:
     """Format average position to have correct decimal places and round to integer"""
     try:
-        # Remove any commas or dots from the string
-        clean_str = str(position_str).replace(',', '').replace('.', '')
+        # Handle empty or invalid input
+        if not position_str or position_str == '0':
+            return 0
+            
+        # Convert to string and remove any commas
+        position_str = str(position_str).replace(',', '')
         
-        # Get the first digits before any potential decimals
-        first_digits = clean_str[:2] if len(clean_str) > 1 else clean_str
+        # If it's already a simple integer like "1", "2", etc.
+        if position_str.isdigit():
+            return int(position_str)
+            
+        # For decimal numbers
+        if '.' in position_str:
+            return round(float(position_str))
+            
+        # For numbers without dots (like "1234" meaning 1.234)
+        # Take first digit and next digit as decimal
+        if len(position_str) >= 2:
+            return round(float(f"{position_str[0]}.{position_str[1]}"))
         
-        # If it starts with a single digit (1-9)
-        if len(first_digits) == 1 or (len(first_digits) == 2 and first_digits[0] == '0'):
-            # Take first digit and next digit as decimal
-            return round(float(f"{first_digits[0]}.{clean_str[1]}"))
-        else:
-            # For numbers starting with 2 or more digits
-            # Take first two digits and third digit as decimal
-            return round(float(f"{first_digits}.{clean_str[2]}"))
+        return int(position_str)
             
     except (ValueError, TypeError, IndexError):
         return 0
