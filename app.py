@@ -1,26 +1,27 @@
 import streamlit as st
 import pandas as pd
 import requests
-from html.parser import HTMLParser
-import re
-from typing import List, Dict
-import html
-import string
 import sys
 import subprocess
-from bs4 import BeautifulSoup
+from typing import List, Dict
+import re
+import string
 
-def install_bs4():
-    """Install BeautifulSoup4 package if not available"""
-    st.info("Installing required package: beautifulsoup4...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4"])
-    st.success("Package installed successfully!")
-
+# Ensure BeautifulSoup is available
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    install_bs4()
+    st.warning("Installing required BeautifulSoup dependency...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4==4.12.3"])
     from bs4 import BeautifulSoup
+
+def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
+    """Scrape content from a URL using BeautifulSoup"""
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
 
 class ContentParser(HTMLParser):
     def __init__(self, content_wrapper=None):
