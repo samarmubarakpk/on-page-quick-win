@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import re
 from typing import List, Dict
 import html
+import string
 
 class SEOParser(HTMLParser):
     def __init__(self, content_wrapper=None):
@@ -92,6 +93,37 @@ class SEOParser(HTMLParser):
         if self.in_wrapper and not self.current_skip:
             self.main_content.append(f"&#{name};")
 
+def clean_to_english(text: str) -> str:
+    """Remove non-English characters and clean the text"""
+    if not text:
+        return ""
+    
+    # Define valid characters (English letters, numbers, and basic punctuation)
+    valid_chars = string.ascii_letters + string.digits + string.punctuation + ' '
+    
+    # Replace common Unicode quotes and dashes with ASCII equivalents
+    replacements = {
+        '"': '"',  # Smart quotes
+        '"': '"',
+        ''': "'",  # Smart apostrophes
+        ''': "'",
+        '–': '-',  # En dash
+        '—': '-',  # Em dash
+        '…': '...' # Ellipsis
+    }
+    
+    # Apply replacements
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    # Keep only valid characters
+    text = ''.join(c for c in text if c in valid_chars)
+    
+    # Clean up whitespace
+    text = ' '.join(text.split())
+    
+    return text
+
 def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
     """Analyze a URL for SEO elements and keyword usage"""
     try:
@@ -106,24 +138,31 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
         # Get the first 5 H2s or empty strings if not enough
         h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
         
-        # Join main content with spaces, properly decode HTML entities, and clean it
+        # Join main content with spaces, properly decode HTML entities, clean it, and filter to English
         main_content = ' '.join(parser.main_content)
         main_content = html.unescape(main_content)  # Properly decode HTML entities
-        main_content = ' '.join(main_content.split())  # Clean up whitespace
+        main_content = clean_to_english(main_content)  # Filter to English characters
+        
+        # Clean all text fields to English characters
+        title = clean_to_english(parser.title)
+        meta_description = clean_to_english(parser.meta_description)
+        h1 = clean_to_english(parser.h1[0] if parser.h1 else '')
+        h2s = [clean_to_english(h) for h in h2s]
+        query = clean_to_english(query)  # Clean the query too for consistent matching
         
         # Function to check if query appears in text (case insensitive)
         def contains_query(text):
-            return query.lower() in text.lower() if text else False
+            return query.lower() in clean_to_english(text).lower() if text else False
         
         return {
             'success': True,
             'url': url,
-            'title': parser.title,
-            'title_contains': contains_query(parser.title),
-            'meta_description': parser.meta_description,
-            'meta_contains': contains_query(parser.meta_description),
-            'h1': parser.h1[0] if parser.h1 else '',
-            'h1_contains': contains_query(parser.h1[0] if parser.h1 else ''),
+            'title': title,
+            'title_contains': contains_query(title),
+            'meta_description': meta_description,
+            'meta_contains': contains_query(meta_description),
+            'h1': h1,
+            'h1_contains': contains_query(h1),
             'h2_1': h2s[0],
             'h2_1_contains': contains_query(h2s[0]),
             'h2_2': h2s[1],
@@ -245,6 +284,14 @@ def format_avg_position(position_str: str) -> float:
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
     
+    # Initialize session state for results
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'not_found_urls' not in st.session_state:
+        st.session_state.not_found_urls = None
+    if 'other_errors' not in st.session_state:
+        st.session_state.other_errors = None
+    
     st.title("On Page Quick Wins")
     st.write("Upload your GSC performance report to analyze keyword usage in your pages.")
     
@@ -263,208 +310,175 @@ def main():
     )
     branded_terms = [term.strip() for term in branded_terms_input.split('\n') if term.strip()]
     
-    if branded_terms:
-        st.info(f"The following branded terms will be excluded: {', '.join(branded_terms)}")
-    
-    uploaded_file = st.file_uploader("Upload GSC Performance Report (CSV)", type=['csv'])
+    uploaded_file = st.file_uploader("Upload your GSC Performance Export (CSV)", type=['csv'])
     
     if uploaded_file:
         try:
-            # Try different CSV reading configurations
-            try:
-                # First try with semicolon separator
-                df = pd.read_csv(uploaded_file, sep=';')
-            except pd.errors.ParserError:
-                # If that fails, try with different settings
-                uploaded_file.seek(0)  # Reset file pointer
-                df = pd.read_csv(
-                    uploaded_file,
-                    sep=';',
-                    encoding='utf-8',
-                    on_bad_lines='skip',
-                    skipinitialspace=True,
-                    engine='python'
-                )
+            # Read CSV file
+            df = pd.read_csv(uploaded_file)
             
-            # Drop empty columns (columns with all NaN values)
-            df = df.dropna(axis=1, how='all')
+            # Check if we need to run the analysis
+            run_analysis = st.button("Run Analysis")
             
-            # Check for required columns with exact names
-            required_columns = ['Query', 'Landing Page', 'Clicks', 'Impressions', 'Avg. Pos']
-            
-            if not all(col in df.columns for col in required_columns):
-                st.error(f"CSV file must contain these columns: {', '.join(required_columns)}")
-                st.write("Found columns:", ', '.join([col for col in df.columns if not pd.isna(col)]))
-                return
-            
-            # Clean the data
-            df = clean_gsc_data(df)
-            
-            if len(df) == 0:
-                st.error("No valid data rows found after cleaning. Please check your CSV file.")
-                return
-            
-            # Format numeric columns
-            df['Clicks'] = df['Clicks'].astype(int)
-            df['Impressions'] = df['Impressions'].astype(int)
-            df['Avg. Pos'] = df['Avg. Pos'].apply(format_avg_position)
-            if 'URL CTR' in df.columns:
-                df['URL CTR'] = df['URL CTR'].apply(lambda x: float(str(x).replace('%', '')) if pd.notna(x) else 0)
-                df['URL CTR'] = df['URL CTR'].apply(format_ctr)
-            
-            # Filter out branded queries first
-            if branded_terms:
-                original_count = len(df)
-                df['is_branded'] = df['Query'].apply(lambda x: is_branded_query(x, branded_terms))
-                df = df[~df['is_branded']]
-                filtered_count = len(df)
-                st.write(f"Filtered out {original_count - filtered_count} branded queries.")
-            
-            # Show data preview of cleaned and filtered data
-            st.subheader("Data Preview")
-            st.write("First few rows of your cleaned and filtered data:")
-            preview_df = df.head()
-            # Format the preview dataframe
-            preview_df = preview_df.drop('is_branded', axis=1, errors='ignore')
-            st.dataframe(preview_df, use_container_width=True)
-            
-            # Get top queries per URL
-            top_queries = get_top_queries_per_url(df)
-            
-            if len(top_queries) == 0:
-                st.warning("No non-branded queries found in the dataset. Please check your branded terms or upload a different dataset.")
-                return
-            
-            # Display summary of URLs and queries being analyzed
-            unique_urls = top_queries['Landing Page'].nunique()
-            total_queries = len(top_queries)
-            st.write(f"Analyzing top queries for {unique_urls} URLs (Total queries: {total_queries})")
-            
-            # Initialize collections for results and errors
-            results = []
-            not_found_urls = set()  # Using set to avoid duplicates
-            other_errors = []
-            
-            # Create progress bar with proper chunking
-            total_analyses = len(top_queries)
-            total_chunks = min(100, total_analyses)  # Limit to 100 chunks
-            chunk_size = max(1, total_analyses // total_chunks)
-            progress_bar = st.progress(0)
-            
-            for idx, row in top_queries.iterrows():
-                # Update progress every chunk_size iterations
-                if idx % chunk_size == 0:
-                    progress = min(1.0, idx / total_analyses)
-                    progress_bar.progress(progress)
+            if run_analysis:
+                st.session_state.analysis_results = None  # Clear previous results
                 
-                analysis = analyze_url(row['Landing Page'], row['Query'], content_wrapper)
+                # Clean column names
+                df.columns = df.columns.str.strip()
                 
-                if analysis.get('error') == '404':
-                    not_found_urls.add(analysis['url'])
-                elif 'error' in analysis:
-                    other_errors.append({
-                        'url': analysis['url'],
-                        'error': analysis['error']
-                    })
-                else:
-                    results.append({
-                        'URL': row['Landing Page'],
-                        'Query': row['Query'],
-                        'Clicks': int(row['Clicks']),
-                        'Impressions': int(row['Impressions']),
-                        'Avg. Position': row['Avg. Pos'],
-                        'CTR': format_ctr(row['Clicks'] / row['Impressions'] * 100 if row['Impressions'] > 0 else 0),
-                        'Title': analysis['title'],
-                        'Title Contains': analysis['title_contains'],
-                        'Meta Description': analysis['meta_description'],
-                        'Meta Contains': analysis['meta_contains'],
-                        'H1': analysis['h1'],
-                        'H1 Contains': analysis['h1_contains'],
-                        'H2-1': analysis['h2_1'],
-                        'H2-1 Contains': analysis['h2_1_contains'],
-                        'H2-2': analysis['h2_2'],
-                        'H2-2 Contains': analysis['h2_2_contains'],
-                        'H2-3': analysis['h2_3'],
-                        'H2-3 Contains': analysis['h2_3_contains'],
-                        'H2-4': analysis['h2_4'],
-                        'H2-4 Contains': analysis['h2_4_contains'],
-                        'H2-5': analysis['h2_5'],
-                        'H2-5 Contains': analysis['h2_5_contains'],
-                        'Copy': analysis['main_content'],
-                        'Copy Contains': analysis['content_contains']
-                    })
-
-            # Set progress to 100% when done
-            progress_bar.progress(1.0)
-
-            if results:
-                results_df = pd.DataFrame(results)
+                # Ensure required columns exist
+                required_columns = {'Query', 'Landing Page', 'Clicks', 'Impressions', 'CTR', 'Position'}
+                if not all(col in df.columns for col in required_columns):
+                    st.error("CSV file must contain these columns: Query, Landing Page, Clicks, Impressions, CTR, Position")
+                    return
                 
-                # Group results by URL for better visualization
-                st.subheader("Analysis Results")
+                # Rename Position column if needed
+                if 'Position' in df.columns:
+                    df = df.rename(columns={'Position': 'Avg. Pos'})
                 
-                # Add download button for all results at the top
-                csv = results_df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download Complete Analysis Report (All URLs)",
-                    data=csv,
-                    file_name="seo_analysis_report_all.csv",
-                    mime="text/csv",
-                    help="Download the complete analysis for all URLs in a single CSV file"
-                )
+                # Get top queries per URL
+                unique_urls = len(df['Landing Page'].unique())
+                top_queries = get_top_queries_per_url(df)
                 
-                # Show individual URL tables
-                for url in results_df['URL'].unique():
-                    st.write(f"### {url}")
-                    url_results = results_df[results_df['URL'] == url]
-                    st.dataframe(url_results, use_container_width=True)
+                if top_queries.empty:
+                    st.warning("No valid queries found after filtering.")
+                    return
+                
+                total_queries = len(top_queries)
+                st.write(f"Analyzing top queries for {unique_urls} URLs (Total queries: {total_queries})")
+                
+                # Initialize collections for results and errors
+                results = []
+                not_found_urls = set()  # Using set to avoid duplicates
+                other_errors = []
+                
+                # Create progress bar with proper chunking
+                total_analyses = len(top_queries)
+                chunk_size = max(1, total_analyses // 100)  # Update progress every 1%
+                progress_bar = st.progress(0)
+                
+                for idx, row in top_queries.iterrows():
+                    # Update progress every chunk_size iterations
+                    if idx % chunk_size == 0:
+                        progress = min(1.0, idx / total_analyses)
+                        progress_bar.progress(progress)
                     
-                    # Individual URL download (optional)
-                    url_csv = url_results.to_csv(index=False)
+                    analysis = analyze_url(row['Landing Page'], row['Query'], content_wrapper)
+                    
+                    if analysis.get('error') == '404':
+                        not_found_urls.add(analysis['url'])
+                    elif 'error' in analysis:
+                        other_errors.append({
+                            'url': analysis['url'],
+                            'error': analysis['error']
+                        })
+                    else:
+                        results.append({
+                            'URL': row['Landing Page'],
+                            'Query': row['Query'],
+                            'Clicks': int(row['Clicks']),
+                            'Impressions': int(row['Impressions']),
+                            'Avg. Position': row['Avg. Pos'],
+                            'CTR': format_ctr(row['Clicks'] / row['Impressions'] * 100 if row['Impressions'] > 0 else 0),
+                            'Title': analysis['title'],
+                            'Title Contains': analysis['title_contains'],
+                            'Meta Description': analysis['meta_description'],
+                            'Meta Contains': analysis['meta_contains'],
+                            'H1': analysis['h1'],
+                            'H1 Contains': analysis['h1_contains'],
+                            'H2-1': analysis['h2_1'],
+                            'H2-1 Contains': analysis['h2_1_contains'],
+                            'H2-2': analysis['h2_2'],
+                            'H2-2 Contains': analysis['h2_2_contains'],
+                            'H2-3': analysis['h2_3'],
+                            'H2-3 Contains': analysis['h2_3_contains'],
+                            'H2-4': analysis['h2_4'],
+                            'H2-4 Contains': analysis['h2_4_contains'],
+                            'H2-5': analysis['h2_5'],
+                            'H2-5 Contains': analysis['h2_5_contains'],
+                            'Copy': analysis['main_content'],
+                            'Copy Contains': analysis['content_contains']
+                        })
+                
+                # Store results in session state
+                st.session_state.analysis_results = results
+                st.session_state.not_found_urls = not_found_urls
+                st.session_state.other_errors = other_errors
+            
+            # Display results if they exist in session state
+            if st.session_state.analysis_results:
+                results = st.session_state.analysis_results
+                not_found_urls = st.session_state.not_found_urls
+                other_errors = st.session_state.other_errors
+                
+                if results:
+                    results_df = pd.DataFrame(results)
+                    
+                    # Group results by URL for better visualization
+                    st.subheader("Analysis Results")
+                    
+                    # Add download button for all results at the top
+                    csv = results_df.to_csv(index=False)
                     st.download_button(
-                        label=f"📥 Download {url.split('/')[-1] or 'homepage'} Analysis",
-                        data=url_csv,
-                        file_name=f"seo_analysis_{url.split('/')[-1] or 'homepage'}.csv",
+                        label="📥 Download Complete Analysis Report (All URLs)",
+                        data=csv,
+                        file_name="seo_analysis_report_all.csv",
                         mime="text/csv",
-                        key=f"download_{url}"  # Unique key for each button
+                        help="Download the complete analysis for all URLs in a single CSV file"
                     )
-                
-                # Show error summary if there were any issues
-                if not_found_urls or other_errors:
-                    st.subheader("⚠️ Analysis Warnings")
                     
-                    # Display 404 errors
-                    if not_found_urls:
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.warning(f"Found {len(not_found_urls)} URLs returning 404 Not Found")
-                        with col2:
-                            # Create CSV for 404 URLs
-                            not_found_df = pd.DataFrame({'URL': list(not_found_urls)})
-                            csv = not_found_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Download 404 URLs",
-                                data=csv,
-                                file_name="404_not_found_urls.csv",
-                                mime="text/csv",
-                            )
+                    # Show individual URL tables
+                    for url in results_df['URL'].unique():
+                        st.write(f"### {url}")
+                        url_results = results_df[results_df['URL'] == url]
+                        st.dataframe(url_results, use_container_width=True)
+                        
+                        # Individual URL download (optional)
+                        url_csv = url_results.to_csv(index=False)
+                        st.download_button(
+                            label=f"📥 Download {url.split('/')[-1] or 'homepage'} Analysis",
+                            data=url_csv,
+                            file_name=f"seo_analysis_{url.split('/')[-1] or 'homepage'}.csv",
+                            mime="text/csv",
+                            key=f"download_{url}"  # Unique key for each button
+                        )
                     
-                    # Display other errors if any
-                    if other_errors:
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.warning(f"Found {len(other_errors)} URLs with other errors")
-                        with col2:
-                            # Create CSV for other errors
-                            other_errors_df = pd.DataFrame(other_errors)
-                            csv = other_errors_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Download Error Details",
-                                data=csv,
-                                file_name="url_errors.csv",
-                                mime="text/csv",
-                            )
-
+                    # Show error summary if there were any issues
+                    if not_found_urls or other_errors:
+                        st.subheader("⚠️ Analysis Warnings")
+                        
+                        # Display 404 errors
+                        if not_found_urls:
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                st.warning(f"Found {len(not_found_urls)} URLs returning 404 Not Found")
+                            with col2:
+                                # Create CSV for 404 URLs
+                                not_found_df = pd.DataFrame({'URL': list(not_found_urls)})
+                                csv = not_found_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download 404 URLs",
+                                    data=csv,
+                                    file_name="404_not_found_urls.csv",
+                                    mime="text/csv",
+                                )
+                        
+                        # Display other errors if any
+                        if other_errors:
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                st.warning(f"Found {len(other_errors)} URLs with other errors")
+                            with col2:
+                                # Create CSV for other errors
+                                other_errors_df = pd.DataFrame(other_errors)
+                                csv = other_errors_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download Error Details",
+                                    data=csv,
+                                    file_name="url_errors.csv",
+                                    mime="text/csv",
+                                )
+        
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
 
