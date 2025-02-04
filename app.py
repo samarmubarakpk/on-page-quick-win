@@ -16,82 +16,95 @@ class SEOParser(HTMLParser):
         self.h2 = []
         self.main_content = []
         self.current_tag = None
+        self.current_text = []
         self.reading_content = False
         self.content_wrapper = content_wrapper
-        self.in_wrapper = False if content_wrapper else True  # If no wrapper specified, always collect content
+        self.in_wrapper = False if content_wrapper else True
         self.skip_tags = {'script', 'style', 'nav', 'header', 'footer', 'iframe', 'noscript'}
         self.current_skip = False
-        self.wrapper_depth = 0  # Track nested divs within wrapper
-    
+        self.wrapper_depth = 0
+
     def handle_starttag(self, tag, attrs):
-        if self.current_skip:
-            return
-            
-        self.current_tag = tag
-        attrs_dict = dict(attrs)
+        attrs = dict(attrs)
         
-        # Check if we're entering the content wrapper
-        if self.content_wrapper and tag == 'div':
-            if 'class' in attrs_dict:
-                classes = attrs_dict['class'].split()
-                if self.content_wrapper in classes:
-                    self.in_wrapper = True
-                    self.wrapper_depth = 1
-                elif self.in_wrapper:
-                    self.wrapper_depth += 1
-        
-        # Skip unwanted elements
+        # Skip unwanted tags
         if tag in self.skip_tags:
             self.current_skip = True
             return
-        
-        if tag == 'title':
-            self.reading_content = True
-        elif tag == 'meta' and attrs_dict.get('name', '').lower() == 'description':
-            self.meta_description = attrs_dict.get('content', '')
-    
+
+        if self.current_skip:
+            return
+
+        # Handle content wrapper
+        if tag == 'div' and self.content_wrapper:
+            if 'class' in attrs and self.content_wrapper in attrs['class']:
+                self.in_wrapper = True
+                self.wrapper_depth += 1
+            elif self.in_wrapper:
+                self.wrapper_depth += 1
+
+        # Track current tag for data handling
+        self.current_tag = tag
+        self.current_text = []
+
+        # Handle meta tags
+        if tag == 'meta' and 'name' in attrs and attrs['name'] == 'description':
+            self.meta_description = attrs.get('content', '')
+
     def handle_endtag(self, tag):
         if tag in self.skip_tags:
             self.current_skip = False
             return
-        
-        # Check if we're exiting the content wrapper
-        if self.content_wrapper and tag == 'div' and self.in_wrapper:
+
+        if self.current_skip:
+            return
+
+        # Handle content wrapper
+        if tag == 'div' and self.in_wrapper:
             self.wrapper_depth -= 1
             if self.wrapper_depth == 0:
                 self.in_wrapper = False
-        
-        if tag == 'title':
-            self.reading_content = False
+
+        # Process collected text
+        if self.current_text and self.in_wrapper:
+            text = ''.join(self.current_text).strip()
+            if text:
+                if tag == 'h1':
+                    self.h1.append(text)
+                elif tag == 'h2':
+                    self.h2.append(text)
+                elif tag in ['p', 'li']:
+                    self.main_content.append(text)
+
         self.current_tag = None
-    
+        self.current_text = []
+
     def handle_data(self, data):
         if self.current_skip:
             return
-            
+
         data = data.strip()
         if not data:
             return
-        
-        if self.reading_content and self.current_tag == 'title':
+
+        if self.current_tag == 'title':
             self.title = data
-        elif self.current_tag == 'h1':
-            self.h1.append(data)
-        elif self.current_tag == 'h2':
-            self.h2.append(data)
-        # Only collect main content if we're in the wrapper (or if no wrapper specified)
-        elif self.in_wrapper and self.current_tag not in {'title', 'h1', 'h2'}:
-            self.main_content.append(data)
-    
+        elif self.in_wrapper and self.current_tag:
+            self.current_text.append(data)
+
     def handle_entityref(self, name):
-        # Handle HTML entities like &amp; &quot; etc.
-        if self.in_wrapper and not self.current_skip:
-            self.main_content.append(f"&{name};")
-    
+        if self.current_skip:
+            return
+        
+        if self.current_tag:
+            self.current_text.append(html.unescape(f"&{name};"))
+
     def handle_charref(self, name):
-        # Handle numeric character references like &#39;
-        if self.in_wrapper and not self.current_skip:
-            self.main_content.append(f"&#{name};")
+        if self.current_skip:
+            return
+            
+        if self.current_tag:
+            self.current_text.append(html.unescape(f"&#{name};"))
 
     def get_data(self):
         return ' '.join(self.main_content)
@@ -222,11 +235,10 @@ def clean_text(text: str) -> str:
     """Clean text by removing extra whitespace and newlines"""
     return ' '.join(text.split())
 
-def check_keyword_presence(text: str, keyword: str) -> bool:
-    """Check if keyword is present in text (case insensitive)"""
-    if not text or not keyword:
-        return False
-    return keyword.lower() in text.lower()
+def is_branded_query(query: str, branded_terms: List[str]) -> bool:
+    """Check if a query contains any branded terms"""
+    query = query.lower()
+    return any(brand.lower() in query for brand in branded_terms)
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
@@ -256,11 +268,6 @@ def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataF
         return pd.DataFrame()  # Return empty DataFrame if no results
         
     return pd.concat(results)
-
-def is_branded_query(query: str, branded_terms: List[str]) -> bool:
-    """Check if a query contains any branded terms"""
-    query = query.lower()
-    return any(brand.lower() in query for brand in branded_terms if brand.strip())
 
 def is_valid_url(url: str) -> bool:
     """Check if a string is a valid URL"""
@@ -301,33 +308,28 @@ def format_ctr(value: float) -> str:
     except (ValueError, TypeError):
         return "0.00%"
 
-def format_avg_position(position_str: str) -> int:
-    """Format average position to have correct decimal places and round to integer"""
+def format_avg_position(position_str: str) -> float:
+    """Format average position to have correct decimal places"""
     try:
         # Handle empty or invalid input
-        if not position_str or position_str == '0':
-            return 0
+        if not position_str or str(position_str).strip() == '0':
+            return 0.0
             
         # Convert to string and remove any commas
-        position_str = str(position_str).replace(',', '')
+        position_str = str(position_str).replace(',', '').strip()
         
-        # If it's already a simple integer like "1", "2", etc.
-        if position_str.isdigit():
-            return int(position_str)
-            
-        # For decimal numbers
+        # If it's a decimal number (either with . or ,)
         if '.' in position_str:
-            return round(float(position_str))
+            return round(float(position_str), 1)
             
-        # For numbers without dots (like "1234" meaning 1.234)
-        # Take first digit and next digit as decimal
-        if len(position_str) >= 2:
-            return round(float(f"{position_str[0]}.{position_str[1]}"))
-        
-        return int(position_str)
+        # If it's a whole number
+        if position_str.isdigit():
+            return float(position_str)
+            
+        return 0.0
             
     except (ValueError, TypeError, IndexError):
-        return 0
+        return 0.0
 
 def main():
     st.set_page_config(page_title="On Page Quick Wins", layout="wide")
