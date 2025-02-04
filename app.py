@@ -193,8 +193,12 @@ def check_keyword_presence(text: str, keyword: str) -> bool:
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
-    # Remove rows with 0 clicks
-    df = df[df['Clicks'] > 0].copy()
+    # Convert numeric columns
+    df['Clicks'] = pd.to_numeric(df['Clicks'].str.replace(',', ''), errors='coerce')
+    df['Impressions'] = pd.to_numeric(df['Impressions'].str.replace(',', ''), errors='coerce')
+    
+    # Remove rows with 0 clicks or invalid numbers
+    df = df[df['Clicks'].notna() & (df['Clicks'] > 0)].copy()
     
     # Remove branded queries if any were marked
     df['is_branded'] = df['Query'].apply(lambda x: 'BRANDED' in str(x).upper())
@@ -353,6 +357,14 @@ def main():
                     st.error(f"CSV file must contain these columns: {', '.join(required_columns)}")
                     st.write("Found columns:", ', '.join(df.columns))
                     return
+                
+                # Convert numeric columns to proper format
+                df['Clicks'] = pd.to_numeric(df['Clicks'].str.replace(',', ''), errors='coerce')
+                df['Impressions'] = pd.to_numeric(df['Impressions'].str.replace(',', ''), errors='coerce')
+                df['Avg. Pos'] = pd.to_numeric(df['Avg. Pos'].str.replace(',', ''), errors='coerce')
+                
+                # Drop rows with invalid numeric values
+                df = df.dropna(subset=['Clicks', 'Impressions', 'Avg. Pos'])
                 
                 # Get top queries per URL
                 unique_urls = len(df['Landing Page'].unique())
