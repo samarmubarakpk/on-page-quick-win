@@ -348,14 +348,11 @@ def main():
                 df.columns = df.columns.str.strip()
                 
                 # Ensure required columns exist
-                required_columns = {'Query', 'Landing Page', 'Clicks', 'Impressions', 'CTR', 'Position'}
+                required_columns = {'Query', 'Landing Page', 'Clicks', 'Impressions', 'Avg. Pos'}
                 if not all(col in df.columns for col in required_columns):
-                    st.error("CSV file must contain these columns: Query, Landing Page, Clicks, Impressions, CTR, Position")
+                    st.error(f"CSV file must contain these columns: {', '.join(required_columns)}")
+                    st.write("Found columns:", ', '.join(df.columns))
                     return
-                
-                # Rename Position column if needed
-                if 'Position' in df.columns:
-                    df = df.rename(columns={'Position': 'Avg. Pos'})
                 
                 # Get top queries per URL
                 unique_urls = len(df['Landing Page'].unique())
