@@ -4,7 +4,22 @@ import requests
 from typing import List, Dict
 import re
 import string
-from bs4 import BeautifulSoup
+
+# Try importing BeautifulSoup with helpful error message
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    st.error("""
+    Error: Could not import BeautifulSoup. 
+    This app requires the beautifulsoup4 package.
+    
+    Current status:
+    1. beautifulsoup4 is listed in requirements.txt
+    2. The import failed, suggesting installation issues
+    
+    Please check the app logs for more details.
+    """)
+    st.stop()
 
 def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
     """Scrape content from a URL using BeautifulSoup"""
