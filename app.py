@@ -4,18 +4,20 @@ import requests
 from typing import List, Dict
 import re
 import string
+import sys
 
-# Try importing BeautifulSoup with helpful error message
+# Try importing BeautifulSoup with detailed error handling
 try:
+    import bs4
     from bs4 import BeautifulSoup
-except ImportError:
-    st.error("""
+except ImportError as e:
+    st.error(f"""
     Error: Could not import BeautifulSoup. 
     This app requires the beautifulsoup4 package.
     
-    Current status:
-    1. beautifulsoup4 is listed in requirements.txt
-    2. The import failed, suggesting installation issues
+    Technical details:
+    Python version: {sys.version}
+    Error message: {str(e)}
     
     Please check the app logs for more details.
     """)
