@@ -7,13 +7,14 @@ from typing import List, Dict
 import re
 import string
 
-# Ensure BeautifulSoup is available
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    st.warning("Installing required BeautifulSoup dependency...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4==4.12.3"])
-    from bs4 import BeautifulSoup
+    st.error("""
+    BeautifulSoup4 is required but not installed. 
+    Please make sure beautifulsoup4 is listed in requirements.txt and redeploy the app.
+    """)
+    st.stop()
 
 def scrape_content(url: str, content_wrapper_class: str = None) -> Dict:
     """Scrape content from a URL using BeautifulSoup"""
