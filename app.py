@@ -314,8 +314,29 @@ def main():
     
     if uploaded_file:
         try:
-            # Read CSV file
-            df = pd.read_csv(uploaded_file)
+            # Try different CSV reading configurations
+            try:
+                # First try with semicolon separator
+                df = pd.read_csv(uploaded_file, sep=';')
+            except pd.errors.ParserError:
+                # If that fails, try with comma separator
+                uploaded_file.seek(0)  # Reset file pointer
+                try:
+                    df = pd.read_csv(uploaded_file)
+                except pd.errors.ParserError:
+                    # If that fails too, try with more flexible settings
+                    uploaded_file.seek(0)  # Reset file pointer
+                    df = pd.read_csv(
+                        uploaded_file,
+                        sep=None,  # Detect separator
+                        engine='python',
+                        on_bad_lines='skip',
+                        encoding='utf-8',
+                        skipinitialspace=True
+                    )
+            
+            # Drop empty columns
+            df = df.dropna(axis=1, how='all')
             
             # Check if we need to run the analysis
             run_analysis = st.button("Run Analysis")
