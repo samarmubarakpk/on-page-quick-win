@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 from html.parser import HTMLParser
 import re
 from typing import List, Dict
@@ -103,26 +102,17 @@ def scrape_content(url: str, content_wrapper_class: str = None) -> dict:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        parser = SEOParser(content_wrapper=content_wrapper_class)
+        parser.feed(response.text)
         
         # Get all H2s from the main content area, excluding navigation/footer
-        content_area = soup.find('div', {'class': 'blog-post-content'}) if not content_wrapper_class else soup.find('div', {'class': content_wrapper_class})
-        if content_area:
-            h2s = content_area.find_all('h2')
-        else:
-            # Fallback to all H2s if content area not found, excluding nav/header/footer
-            h2s = [h2 for h2 in soup.find_all('h2') 
-                  if not any(parent.name in ['nav', 'header', 'footer'] 
-                           for parent in h2.parents)]
+        h2s = parser.h2
         
         # Extract text from all H2s
-        h2_texts = [h2.get_text(strip=True) for h2 in h2s if h2.get_text(strip=True)]
+        h2_texts = h2s
         
         # Get main content
-        if content_area:
-            content = ' '.join(p.get_text(strip=True) for p in content_area.find_all(['p', 'li']))
-        else:
-            content = ''
+        content = parser.get_data()
             
         return {
             'h1': [],  # We'll handle H1s separately
