@@ -1,198 +1,109 @@
 import streamlit as st
 import pandas as pd
 import requests
-from html.parser import HTMLParser
+from lxml import html, etree
 import re
 from typing import List, Dict
-import html
 import string
 
-class SEOParser(HTMLParser):
+class SEOParser:
     def __init__(self, content_wrapper=None):
-        super().__init__()
         self.title = ""
         self.meta_description = ""
         self.h1 = []
         self.h2 = []
         self.main_content = []
-        self.current_tag = None
-        self.current_text = []
-        self.reading_content = False
         self.content_wrapper = content_wrapper
-        self.in_wrapper = False if content_wrapper else True
-        self.skip_tags = {'script', 'style', 'nav', 'header', 'footer', 'iframe', 'noscript'}
-        self.current_skip = False
-        self.wrapper_depth = 0
 
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        
-        # Skip unwanted tags
-        if tag in self.skip_tags:
-            self.current_skip = True
-            return
-
-        if self.current_skip:
-            return
-
-        # Handle content wrapper
-        if tag == 'div' and self.content_wrapper:
-            if 'class' in attrs and self.content_wrapper in attrs['class']:
-                self.in_wrapper = True
-                self.wrapper_depth += 1
-            elif self.in_wrapper:
-                self.wrapper_depth += 1
-
-        # Track current tag for data handling
-        self.current_tag = tag
-        self.current_text = []
-
-        # Handle meta tags
-        if tag == 'meta' and 'name' in attrs and attrs['name'] == 'description':
-            self.meta_description = attrs.get('content', '')
-
-    def handle_endtag(self, tag):
-        if tag in self.skip_tags:
-            self.current_skip = False
-            return
-
-        if self.current_skip:
-            return
-
-        # Handle content wrapper
-        if tag == 'div' and self.in_wrapper:
-            self.wrapper_depth -= 1
-            if self.wrapper_depth == 0:
-                self.in_wrapper = False
-
-        # Process collected text
-        if self.current_text and self.in_wrapper:
-            text = ''.join(self.current_text).strip()
-            if text:
-                if tag == 'h1':
-                    self.h1.append(text)
-                elif tag == 'h2':
-                    self.h2.append(text)
-                elif tag in ['p', 'li']:
-                    self.main_content.append(text)
-
-        self.current_tag = None
-        self.current_text = []
-
-    def handle_data(self, data):
-        if self.current_skip:
-            return
-
-        data = data.strip()
-        if not data:
-            return
-
-        if self.current_tag == 'title':
-            self.title = data
-        elif self.in_wrapper and self.current_tag:
-            self.current_text.append(data)
-
-    def handle_entityref(self, name):
-        if self.current_skip:
-            return
-        
-        if self.current_tag:
-            self.current_text.append(html.unescape(f"&{name};"))
-
-    def handle_charref(self, name):
-        if self.current_skip:
-            return
+    def scrape_content(self, url: str) -> Dict[str, List[str]]:
+        """Scrape content from a URL, optionally within a specific class wrapper"""
+        try:
+            # Make the request with a user agent
+            response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            response.raise_for_status()
             
-        if self.current_tag:
-            self.current_text.append(html.unescape(f"&#{name};"))
-
-    def get_data(self):
-        return ' '.join(self.main_content)
-
-def scrape_content(url: str, content_wrapper_class: str = None) -> dict:
-    """Scrape content from a URL, optionally within a specific class wrapper"""
-    try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        response.raise_for_status()
-        
-        parser = SEOParser(content_wrapper=content_wrapper_class)
-        parser.feed(response.text)
-        
-        # Get all H2s from the main content area, excluding navigation/footer
-        h2s = parser.h2
-        
-        # Extract text from all H2s
-        h2_texts = h2s
-        
-        # Get main content
-        content = parser.get_data()
+            # Parse the HTML
+            tree = html.fromstring(response.content)
             
-        return {
-            'h1': [],  # We'll handle H1s separately
-            'h2': h2_texts,  # Return all H2s found
-            'content': content,
-            'url': url
-        }
-        
-    except Exception as e:
-        return {'error': str(e), 'url': url}
+            # Initialize results
+            results = {
+                'h1': [],
+                'h2': [],
+                'content': ''
+            }
+            
+            # Extract content based on wrapper if specified
+            if self.content_wrapper:
+                content_area = tree.xpath(f"//div[contains(@class, '{self.content_wrapper}')]")
+                if content_area:
+                    # Get H1s and H2s within the content area
+                    results['h1'] = [h.text_content().strip() for h in content_area[0].xpath('.//h1')]
+                    results['h2'] = [h.text_content().strip() for h in content_area[0].xpath('.//h2')]
+                    # Get paragraphs and list items
+                    content_elements = content_area[0].xpath('.//p|.//li')
+                    results['content'] = ' '.join(e.text_content().strip() for e in content_elements if e.text_content().strip())
+            else:
+                # If no wrapper specified, get content from the main body excluding navigation/header/footer
+                main_content = tree.xpath("//body[not(ancestor-or-self::nav) and not(ancestor-or-self::header) and not(ancestor-or-self::footer)]")
+                if main_content:
+                    results['h1'] = [h.text_content().strip() for h in main_content[0].xpath('.//h1')]
+                    results['h2'] = [h.text_content().strip() for h in main_content[0].xpath('.//h2')]
+                    content_elements = main_content[0].xpath('.//p|.//li')
+                    results['content'] = ' '.join(e.text_content().strip() for e in content_elements if e.text_content().strip())
+            
+            return results
+            
+        except Exception as e:
+            st.error(f"Error scraping content: {str(e)}")
+            return {'h1': [], 'h2': [], 'content': ''}
 
-def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
-    """Analyze a URL for SEO elements and keyword usage"""
-    try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        if response.status_code == 404:
-            return {'error': '404', 'url': url}
-        response.raise_for_status()
-        
-        parser = SEOParser(content_wrapper)
-        parser.feed(response.text)
-        
-        # Get the first 5 H2s or empty strings if not enough
-        h2s = parser.h2[:5] + [''] * (5 - len(parser.h2))
-        
-        # Join main content with spaces, properly decode HTML entities, clean it, and filter to English
-        main_content = parser.get_data()
-        main_content = html.unescape(main_content)  # Properly decode HTML entities
-        main_content = clean_to_english(main_content)  # Filter to English characters
-        
-        # Clean all text fields to English characters
-        title = clean_to_english(parser.title)
-        meta_description = clean_to_english(parser.meta_description)
-        h1 = clean_to_english(parser.h1[0] if parser.h1 else '')
-        h2s = [clean_to_english(h) for h in h2s]
-        query = clean_to_english(query)  # Clean the query too for consistent matching
-        
-        # Function to check if query appears in text (case insensitive)
-        def contains_query(text):
-            return query.lower() in clean_to_english(text).lower() if text else False
-        
-        return {
-            'success': True,
-            'url': url,
-            'title': title,
-            'title_contains': contains_query(title),
-            'meta_description': meta_description,
-            'meta_contains': contains_query(meta_description),
-            'h1': h1,
-            'h1_contains': contains_query(h1),
-            'h2_1': h2s[0],
-            'h2_1_contains': contains_query(h2s[0]),
-            'h2_2': h2s[1],
-            'h2_2_contains': contains_query(h2s[1]),
-            'h2_3': h2s[2],
-            'h2_3_contains': contains_query(h2s[2]),
-            'h2_4': h2s[3],
-            'h2_4_contains': contains_query(h2s[3]),
-            'h2_5': h2s[4],
-            'h2_5_contains': contains_query(h2s[4]),
-            'main_content': main_content[:500] + '...' if len(main_content) > 500 else main_content,
-            'content_contains': contains_query(main_content)
-        }
-    except requests.exceptions.RequestException as e:
-        return {'error': str(e), 'url': url}
-    except Exception as e:
-        return {'error': str(e), 'url': url}
+    def analyze_url(self, url: str, query: str) -> Dict:
+        """Analyze a URL for SEO elements and keyword usage"""
+        try:
+            content = self.scrape_content(url)
+            
+            # Clean the query for analysis
+            clean_query = clean_to_english(query.lower())
+            query_words = set(clean_query.split())
+            
+            # Analyze content
+            h1_matches = []
+            h2_matches = []
+            content_matches = []
+            
+            # Check H1s
+            for h1 in content['h1']:
+                clean_h1 = clean_to_english(h1.lower())
+                if any(word in clean_h1 for word in query_words):
+                    h1_matches.append(h1)
+            
+            # Check H2s
+            for h2 in content['h2']:
+                clean_h2 = clean_to_english(h2.lower())
+                if any(word in clean_h2 for word in query_words):
+                    h2_matches.append(h2)
+            
+            # Check content
+            if content['content']:
+                clean_content = clean_to_english(content['content'].lower())
+                content_matches = [sent.strip() for sent in re.split('[.!?]', clean_content)
+                                 if any(word in sent.lower() for word in query_words)]
+            
+            return {
+                'h1_matches': h1_matches,
+                'h2_matches': h2_matches,
+                'content_matches': content_matches[:5],  # Limit to top 5 matches
+                'has_content': bool(content['content'])
+            }
+            
+        except Exception as e:
+            st.error(f"Error analyzing URL: {str(e)}")
+            return {
+                'h1_matches': [],
+                'h2_matches': [],
+                'content_matches': [],
+                'has_content': False
+            }
 
 def clean_to_english(text: str) -> str:
     """Remove non-English characters and clean the text"""
@@ -237,8 +148,15 @@ def clean_text(text: str) -> str:
 
 def is_branded_query(query: str, branded_terms: List[str]) -> bool:
     """Check if a query contains any branded terms"""
-    query = query.lower()
-    return any(brand.lower() in query for brand in branded_terms)
+    if not query or not branded_terms:
+        return False
+        
+    query = query.lower().strip()
+    # Clean and prepare branded terms
+    cleaned_terms = [term.lower().strip() for term in branded_terms if term and term.strip()]
+    
+    # Check if any cleaned branded term is in the query
+    return any(term in query for term in cleaned_terms if term)
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
@@ -318,13 +236,14 @@ def format_avg_position(position_str: str) -> float:
         # Convert to string and remove any commas
         position_str = str(position_str).replace(',', '').strip()
         
-        # If it's a decimal number (either with . or ,)
-        if '.' in position_str:
+        # Try to convert to float directly
+        try:
             return round(float(position_str), 1)
-            
-        # If it's a whole number
-        if position_str.isdigit():
-            return float(position_str)
+        except ValueError:
+            # If that fails, try to extract the first number
+            numbers = re.findall(r'\d+\.?\d*', position_str)
+            if numbers:
+                return round(float(numbers[0]), 1)
             
         return 0.0
             
@@ -441,15 +360,11 @@ def main():
                         progress = min(1.0, idx / total_analyses)
                         progress_bar.progress(progress)
                     
-                    analysis = analyze_url(row['Landing Page'], row['Query'], content_wrapper)
+                    parser = SEOParser(content_wrapper)
+                    analysis = parser.analyze_url(row['Landing Page'], row['Query'])
                     
-                    if analysis.get('error') == '404':
+                    if not analysis['has_content']:
                         not_found_urls.add(analysis['url'])
-                    elif 'error' in analysis:
-                        other_errors.append({
-                            'url': analysis['url'],
-                            'error': analysis['error']
-                        })
                     else:
                         results.append({
                             'URL': row['Landing Page'],
@@ -458,24 +373,24 @@ def main():
                             'Impressions': int(row['Impressions']),
                             'Avg. Position': row['Avg. Pos'],
                             'CTR': format_ctr(row['Clicks'] / row['Impressions'] * 100 if row['Impressions'] > 0 else 0),
-                            'Title': analysis['title'],
-                            'Title Contains': analysis['title_contains'],
-                            'Meta Description': analysis['meta_description'],
-                            'Meta Contains': analysis['meta_contains'],
-                            'H1': analysis['h1'],
-                            'H1 Contains': analysis['h1_contains'],
-                            'H2-1': analysis['h2_1'],
-                            'H2-1 Contains': analysis['h2_1_contains'],
-                            'H2-2': analysis['h2_2'],
-                            'H2-2 Contains': analysis['h2_2_contains'],
-                            'H2-3': analysis['h2_3'],
-                            'H2-3 Contains': analysis['h2_3_contains'],
-                            'H2-4': analysis['h2_4'],
-                            'H2-4 Contains': analysis['h2_4_contains'],
-                            'H2-5': analysis['h2_5'],
-                            'H2-5 Contains': analysis['h2_5_contains'],
-                            'Copy': analysis['main_content'],
-                            'Copy Contains': analysis['content_contains']
+                            'Title': '',
+                            'Title Contains': False,
+                            'Meta Description': '',
+                            'Meta Contains': False,
+                            'H1': analysis['h1_matches'],
+                            'H1 Contains': bool(analysis['h1_matches']),
+                            'H2-1': analysis['h2_matches'],
+                            'H2-1 Contains': bool(analysis['h2_matches']),
+                            'H2-2': '',
+                            'H2-2 Contains': False,
+                            'H2-3': '',
+                            'H2-3 Contains': False,
+                            'H2-4': '',
+                            'H2-4 Contains': False,
+                            'H2-5': '',
+                            'H2-5 Contains': False,
+                            'Copy': analysis['content_matches'],
+                            'Copy Contains': bool(analysis['content_matches'])
                         })
                 
                 # Store results in session state
