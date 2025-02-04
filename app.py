@@ -181,6 +181,12 @@ def analyze_url(url: str, query: str, content_wrapper: str = None) -> Dict:
     except Exception as e:
         return {'error': str(e), 'url': url}
 
+def convert_to_numeric(series):
+    """Safely convert a series to numeric, handling both string and numeric inputs"""
+    if series.dtype.kind in 'iuf':  # If already integer, unsigned int, or float
+        return series
+    return pd.to_numeric(series.astype(str).str.replace(',', ''), errors='coerce')
+
 def clean_text(text: str) -> str:
     """Clean text by removing extra whitespace and newlines"""
     return ' '.join(text.split())
@@ -193,9 +199,9 @@ def check_keyword_presence(text: str, keyword: str) -> bool:
 
 def get_top_queries_per_url(df: pd.DataFrame, max_queries: int = 10) -> pd.DataFrame:
     """Get top queries by clicks for each unique URL"""
-    # Convert numeric columns
-    df['Clicks'] = pd.to_numeric(df['Clicks'].str.replace(',', ''), errors='coerce')
-    df['Impressions'] = pd.to_numeric(df['Impressions'].str.replace(',', ''), errors='coerce')
+    # Convert numeric columns safely
+    df['Clicks'] = convert_to_numeric(df['Clicks'])
+    df['Impressions'] = convert_to_numeric(df['Impressions'])
     
     # Remove rows with 0 clicks or invalid numbers
     df = df[df['Clicks'].notna() & (df['Clicks'] > 0)].copy()
@@ -241,8 +247,8 @@ def clean_gsc_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df['Landing Page'].apply(is_valid_url)]
     
     # Convert clicks and impressions to numeric, replacing non-numeric with 0
-    df['Clicks'] = pd.to_numeric(df['Clicks'], errors='coerce').fillna(0).astype(int)
-    df['Impressions'] = pd.to_numeric(df['Impressions'], errors='coerce').fillna(0).astype(int)
+    df['Clicks'] = convert_to_numeric(df['Clicks'])
+    df['Impressions'] = convert_to_numeric(df['Impressions'])
     
     # Remove rows where Query is empty or non-string
     df = df[df['Query'].notna() & df['Query'].astype(str).str.strip().astype(bool)]
@@ -358,10 +364,10 @@ def main():
                     st.write("Found columns:", ', '.join(df.columns))
                     return
                 
-                # Convert numeric columns to proper format
-                df['Clicks'] = pd.to_numeric(df['Clicks'].str.replace(',', ''), errors='coerce')
-                df['Impressions'] = pd.to_numeric(df['Impressions'].str.replace(',', ''), errors='coerce')
-                df['Avg. Pos'] = pd.to_numeric(df['Avg. Pos'].str.replace(',', ''), errors='coerce')
+                # Convert numeric columns safely
+                df['Clicks'] = convert_to_numeric(df['Clicks'])
+                df['Impressions'] = convert_to_numeric(df['Impressions'])
+                df['Avg. Pos'] = convert_to_numeric(df['Avg. Pos'])
                 
                 # Drop rows with invalid numeric values
                 df = df.dropna(subset=['Clicks', 'Impressions', 'Avg. Pos'])
